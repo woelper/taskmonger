@@ -1,0 +1,291 @@
+use eframe::egui;
+use palette::{Hsl, IntoColor, Srgb};
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use std::ops::Range;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Tag {
+    name: String,
+    color: [u8; 3],
+}
+
+impl Tag {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            color: Self::random_color(),
+        }
+    }
+
+    fn random_color() -> [u8; 3] {
+        let mut rng = rand::thread_rng();
+
+        // Generate color in HSL space for better perceptual distribution
+        let hue = rng.gen_range(0.0..360.0);
+        let saturation = rng.gen_range(0.5..0.8); // Medium to high saturation
+        let lightness = rng.gen_range(0.5..0.7);  // Medium lightness for readability
+
+        let hsl = Hsl::new(hue, saturation, lightness);
+        let rgb: Srgb = hsl.into_color();
+
+        [
+            (rgb.red * 255.0) as u8,
+            (rgb.green * 255.0) as u8,
+            (rgb.blue * 255.0) as u8,
+        ]
+    }
+
+    fn to_color32(&self) -> egui::Color32 {
+        egui::Color32::from_rgb(self.color[0], self.color[1], self.color[2])
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaggedRange {
+    tag_name: String,
+    range: Range<usize>,
+    id: usize,
+}
+
+impl TaggedRange {
+    fn new(tag_name: String, range: Range<usize>, id: usize) -> Self {
+        Self {
+            tag_name,
+            range,
+            id,
+        }
+    }
+}
+
+struct BuffMonster {
+    buffer: String,
+    tags: Vec<Tag>,
+    tagged_ranges: Vec<TaggedRange>,
+    next_id: usize,
+    new_tag_name: String,
+    selection_start: Option<usize>,
+    selection_end: Option<usize>,
+}
+
+impl Default for BuffMonster {
+    fn default() -> Self {
+        Self {
+            buffer: "Welcome to BuffMonster!\n\nCreate tags and apply them to text ranges.\n".to_string(),
+            tags: vec![],
+            tagged_ranges: Vec::new(),
+            next_id: 0,
+            new_tag_name: String::new(),
+            selection_start: None,
+            selection_end: None,
+        }
+    }
+}
+
+impl BuffMonster {
+    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        Self::default()
+    }
+
+    fn add_tag(&mut self, name: String) {
+        let name = name.trim().to_string();
+        if !name.is_empty() && !self.tags.iter().any(|t| t.name == name) {
+            self.tags.push(Tag::new(name));
+        }
+    }
+
+    fn get_tag(&self, name: &str) -> Option<&Tag> {
+        self.tags.iter().find(|t| t.name == name)
+    }
+
+    fn apply_tag_to_selection(&mut self, tag_name: &str) {
+        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+            let range = if start < end { start..end } else { end..start };
+
+            if range.start < range.end && range.end <= self.buffer.len() {
+                let tagged_range = TaggedRange::new(tag_name.to_string(), range, self.next_id);
+                self.next_id += 1;
+                self.tagged_ranges.push(tagged_range);
+            }
+        }
+    }
+
+    fn delete_tagged_range(&mut self, id: usize) {
+        self.tagged_ranges.retain(|t| t.id != id);
+    }
+
+    fn delete_tag(&mut self, tag_name: &str) {
+        self.tags.retain(|t| t.name != tag_name);
+        self.tagged_ranges.retain(|tr| tr.tag_name != tag_name);
+    }
+}
+
+impl eframe::App for BuffMonster {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::SidePanel::right("tags_panel").min_width(250.0).show(ctx, |ui| {
+            ui.heading("Tags");
+            ui.separator();
+
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.new_tag_name);
+                if !self.new_tag_name.is_empty() {
+                    if ui.button("+").clicked() {
+                        self.add_tag(self.new_tag_name.clone());
+                        self.new_tag_name.clear();
+                    }
+                }
+           
+            });
+
+            ui.separator();
+
+            let tags_clone = self.tags.clone();
+            egui::ScrollArea::vertical().id_salt("tags").max_height(150.0).show(ui, |ui| {
+                for tag in tags_clone.iter() {
+                    ui.horizontal(|ui| {
+                        let color = tag.to_color32();
+                        let button = egui::Button::new(egui::RichText::new(format!("{}", tag.name)).color(color));
+                        if ui.add(button).clicked() {
+                            self.apply_tag_to_selection(&tag.name);
+                        }
+                        if ui.small_button("x").clicked() {
+                            self.delete_tag(&tag.name);
+                        }
+                    });
+                }
+            });
+
+
+            ui.separator();
+            ui.label("Tagged ranges:");
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for tr in self.tagged_ranges.clone().iter() {
+                    ui.group(|ui| {
+                        if let Some(tag) = self.get_tag(&tr.tag_name) {
+                            let color = tag.to_color32();
+                            ui.label(egui::RichText::new(format!("#{}", tr.tag_name)).color(color));
+                        }
+
+                        if tr.range.end <= self.buffer.len() {
+                            let preview = &self.buffer[tr.range.clone()];
+                            let preview = if preview.len() > 30 {
+                                format!("{}...", &preview[..30])
+                            } else {
+                                preview.to_string()
+                            };
+                            ui.label(format!("\"{}\"", preview));
+                        }
+
+                        if ui.small_button("Delete").clicked() {
+                            self.delete_tagged_range(tr.id);
+                        }
+                    });
+                    ui.add_space(5.0);
+                }
+            });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+
+
+            let tagged_ranges = self.tagged_ranges.clone();
+            let tags = self.tags.clone();
+
+            let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+                let mut layout_job = egui::text::LayoutJob::default();
+                layout_job.wrap.max_width = wrap_width;
+
+                let mut last_pos = 0;
+                let default_color = ui.style().visuals.text_color();
+                let font_id = egui::FontId::monospace(14.0);
+
+                let mut sorted_ranges = tagged_ranges.clone();
+                sorted_ranges.sort_by_key(|tr| tr.range.start);
+
+                for tr in sorted_ranges.iter() {
+                    if tr.range.start > last_pos && last_pos < text.len() {
+                        let end = tr.range.start.min(text.len());
+                        layout_job.append(
+                            &text[last_pos..end],
+                            0.0,
+                            egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color: default_color,
+                                ..Default::default()
+                            },
+                        );
+                    }
+
+                    if tr.range.end <= text.len() {
+                        let color = tags.iter()
+                            .find(|tag| tag.name == tr.tag_name)
+                            .map(|tag| tag.to_color32())
+                            .unwrap_or(default_color);
+
+                        layout_job.append(
+                            &text[tr.range.clone()],
+                            0.0,
+                            egui::TextFormat {
+                                font_id: font_id.clone(),
+                                color,
+                                ..Default::default()
+                            },
+                        );
+                        last_pos = tr.range.end;
+                    }
+                }
+
+                if last_pos < text.len() {
+                    layout_job.append(
+                        &text[last_pos..],
+                        0.0,
+                        egui::TextFormat {
+                            font_id: font_id.clone(),
+                            color: default_color,
+                            ..Default::default()
+                        },
+                    );
+                }
+
+                ui.fonts(|f| f.layout_job(layout_job))
+            };
+
+            let output = egui::TextEdit::multiline(&mut self.buffer)
+                .desired_width(f32::INFINITY)
+                .desired_rows(30)
+                .font(egui::TextStyle::Monospace)
+                .layouter(&mut layouter)
+                .show(ui);
+
+            if let Some(cursor_range) = output.cursor_range {
+                self.selection_start = Some(cursor_range.primary.ccursor.index);
+                self.selection_end = Some(cursor_range.secondary.ccursor.index);
+            }
+            
+            if output.response.changed() {
+                if let Some(range) = output.cursor_range {
+                    if let Some(single) = range.single() {
+                        println!("Cursor at {}", single.ccursor.index)
+                        
+                    }
+                }
+            }
+        });
+    }
+}
+
+fn main() -> eframe::Result<()> {
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1000.0, 700.0])
+            .with_title("BuffMonster"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "BuffMonster",
+        native_options,
+        Box::new(|cc| Ok(Box::new(BuffMonster::new(cc)))),
+    )
+}
