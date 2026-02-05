@@ -4,6 +4,8 @@ use palette::{Hsl, IntoColor, Srgb};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
+use std::fs;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Tag {
@@ -46,7 +48,6 @@ impl Tag {
 struct TaggedRange {
     tag_name: String,
     range: Range<usize>,
-    id: usize,
 }
 
 impl TaggedRange {
@@ -54,17 +55,19 @@ impl TaggedRange {
         Self {
             tag_name,
             range,
-            id,
         }
     }
 }
 
+#[derive(Serialize, Deserialize)]
 struct BuffMonster {
     buffer: String,
     tags: Vec<Tag>,
     tagged_ranges: Vec<TaggedRange>,
     next_id: usize,
+    #[serde(skip)]
     new_tag_name: String,
+    #[serde(skip)]
     selection: Range<usize>,
 }
 
@@ -83,14 +86,44 @@ impl Default for BuffMonster {
 }
 
 impl BuffMonster {
+    fn save_path() -> PathBuf {
+        // Save in the current directory for simplicity
+        // Could use dirs crate for a proper config directory
+        PathBuf::from("buffmonster_state.json")
+    }
+
+    fn save_to_disk(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(Self::save_path(), json)?;
+        println!("Saved state to {}", Self::save_path().display());
+        Ok(())
+    }
+
+    fn load_from_disk() -> Result<Self, Box<dyn std::error::Error>> {
+        let path = Self::save_path();
+        if path.exists() {
+            let json = fs::read_to_string(&path)?;
+            let app: Self = serde_json::from_str(&json)?;
+            println!("Loaded state from {}", path.display());
+            Ok(app)
+        } else {
+            Err("Save file does not exist".into())
+        }
+    }
+
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        Self::default()
+        // Try to load from disk, fallback to default
+        Self::load_from_disk().unwrap_or_else(|e| {
+            println!("No saved state found ({}), starting fresh", e);
+            Self::default()
+        })
     }
 
     fn add_tag(&mut self, name: String) {
         let name = name.trim().to_string();
         if !name.is_empty() && !self.tags.iter().any(|t| t.name == name) {
             self.tags.push(Tag::new(name));
+            let _ = self.save_to_disk();
         }
     }
 
@@ -109,16 +142,19 @@ impl BuffMonster {
             let tagged_range = TaggedRange::new(tag_name.to_string(), range, self.next_id);
             self.next_id += 1;
             self.tagged_ranges.push(tagged_range);
+            let _ = self.save_to_disk();
         }
     }
 
-    fn delete_tagged_range(&mut self, id: usize) {
-        self.tagged_ranges.retain(|t| t.id != id);
+    fn delete_tagged_range(&mut self, name: &str) {
+        self.tagged_ranges.retain(|t| t.tag_name != name);
+        let _ = self.save_to_disk();
     }
 
     fn delete_tag(&mut self, tag_name: &str) {
         self.tags.retain(|t| t.name != tag_name);
         self.tagged_ranges.retain(|tr| tr.tag_name != tag_name);
+        let _ = self.save_to_disk();
     }
 }
 
@@ -183,7 +219,7 @@ impl eframe::App for BuffMonster {
                             }
 
                             if ui.small_button("Delete").clicked() {
-                                self.delete_tagged_range(tr.id);
+                                self.delete_tagged_range(&tr.tag_name);
                             }
                         });
                         ui.add_space(5.0);
@@ -324,6 +360,9 @@ impl eframe::App for BuffMonster {
 
                     }
                 }
+
+                // Auto-save on text changes
+                let _ = self.save_to_disk();
             }
         });
     }
