@@ -1,4 +1,5 @@
 use eframe::egui;
+use egui::Key;
 use palette::{Hsl, IntoColor, Srgb};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -173,18 +174,12 @@ impl eframe::App for BuffMonster {
                             if let Some(tag) = self.get_tag(&tr.tag_name) {
                                 let color = tag.to_color32();
                                 ui.label(
-                                    egui::RichText::new(format!("#{}", tr.tag_name)).color(color),
+                                    egui::RichText::new(format!("{}", tr.tag_name)).color(color),
                                 );
                             }
 
                             if tr.range.end <= self.buffer.len() {
-                                let preview = &self.buffer[tr.range.clone()];
-                                let preview = if preview.len() > 30 {
-                                    format!("{}...", &preview[..30])
-                                } else {
-                                    preview.to_string()
-                                };
-                                ui.label(format!("\"{}\"", preview));
+                                ui.label(format!("{:?}", tr.range));
                             }
 
                             if ui.small_button("Delete").clicked() {
@@ -275,8 +270,50 @@ impl eframe::App for BuffMonster {
 
             if output.response.changed() {
                 if let Some(range) = output.cursor_range {
-                    if let Some(single) = range.single() {
-                        println!("Cursor at {}", single.ccursor.index)
+                    let keys_down = ctx.input(|i| i.keys_down.clone());
+
+                    if !keys_down.is_empty() {
+                        println!("key down");
+
+                        if let Some(single) = range.single() {
+                            println!("Cursor at {}", single.ccursor.index);
+
+                            for tr in &mut self.tagged_ranges {
+                                if tr.range.contains(&single.ccursor.index) {
+                                    println!("need to replace {:?}", range);
+                                    if keys_down.iter().nth(0) == Some(&Key::Backspace) {
+                                        tr.range.end -= 1;
+                                    } else {
+                                        tr.range.end += 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            // multiple chars selected
+                            let range = range.as_ccursor_range();
+                            
+                            // TODO: if a single key is pressed, recalculate the appropriate tagged range
+                            // in that case, the whole range should collapse to 1, if the key is backspace, to 0.
+                            
+                            // if keys_down.iter().nth(0) == Some(&Key::Backspace) {
+                            //     for tr in &mut self.tagged_ranges {
+                            //         tr.range.
+                            //         if tr.range == (range.primary.index..range.secondary.index) {
+                            //             println!("need to replace {:?}", range);
+                            //             tr.range.end += 1;
+                            //         }
+                            //     }
+                            // }
+                        }
+
+                        // println!("Cursor at {}", single.ccursor.index);
+
+                        // for tr in &mut self.tagged_ranges {
+                        //     if tr.range.contains(&single.ccursor.index) {
+                        //         println!("need to replace {:?}", range);
+                        //         tr.range.end += 1;
+                        //     }
+                        // }
                     }
                 }
             }
