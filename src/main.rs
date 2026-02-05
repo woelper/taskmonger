@@ -290,30 +290,38 @@ impl eframe::App for BuffMonster {
                             }
                         } else {
                             // multiple chars selected
-                            let range = range.as_ccursor_range();
-                            
-                            // TODO: if a single key is pressed, recalculate the appropriate tagged range
-                            // in that case, the whole range should collapse to 1, if the key is backspace, to 0.
-                            
-                            // if keys_down.iter().nth(0) == Some(&Key::Backspace) {
-                            //     for tr in &mut self.tagged_ranges {
-                            //         tr.range.
-                            //         if tr.range == (range.primary.index..range.secondary.index) {
-                            //             println!("need to replace {:?}", range);
-                            //             tr.range.end += 1;
-                            //         }
-                            //     }
-                            // }
+                            let cursor_range = range.as_ccursor_range();
+                            let sel_start = cursor_range.primary.index.min(cursor_range.secondary.index);
+                            let sel_end = cursor_range.primary.index.max(cursor_range.secondary.index);
+                            let selected_range = sel_start..sel_end;
+                            // Find and update tagged ranges that match or overlap the selection
+                            for tr in &mut self.tagged_ranges {
+                                // Check if the tagged range matches the selection exactly
+                                if tr.range == selected_range {
+                                    println!("Updating tagged range {:?} for selection", tr.range);
+
+                 
+                                    if keys_down.iter().nth(0) == Some(&Key::Backspace) {
+                                        tr.range = sel_start..sel_start;
+                                    } else {
+                                        tr.range = sel_start..(sel_start + 1);
+                                    }
+                                } else if tr.range.contains(&sel_start) && tr.range.contains(&(sel_end.saturating_sub(1))) {
+                                    // Tagged range contains the selection - adjust the end
+                                    let selection_len = sel_end - sel_start;
+                                    println!("Adjusting tagged range {:?} that contains selection", tr.range);
+
+                                    if keys_down.iter().nth(0) == Some(&Key::Backspace) {
+                                        // Selection deleted, no replacement
+                                        tr.range.end = tr.range.end.saturating_sub(selection_len);
+                                    } else {
+                                        // Selection replaced with 1 character
+                                        tr.range.end = tr.range.end.saturating_sub(selection_len - 1);
+                                    }
+                                }
+                            }
                         }
 
-                        // println!("Cursor at {}", single.ccursor.index);
-
-                        // for tr in &mut self.tagged_ranges {
-                        //     if tr.range.contains(&single.ccursor.index) {
-                        //         println!("need to replace {:?}", range);
-                        //         tr.range.end += 1;
-                        //     }
-                        // }
                     }
                 }
             }
