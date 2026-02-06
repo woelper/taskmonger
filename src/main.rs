@@ -22,12 +22,12 @@ impl Tag {
     }
 
     fn random_color() -> [u8; 3] {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Generate color in HSL space for better perceptual distribution
-        let hue = rng.gen_range(0.0..360.0);
-        let saturation = rng.gen_range(0.5..0.8); // Medium to high saturation
-        let lightness = rng.gen_range(0.5..0.7); // Medium lightness for readability
+        let hue = rng.random_range(0.0..360.0);
+        let saturation = rng.random_range(0.5..0.8); // Medium to high saturation
+        let lightness = rng.random_range(0.5..0.7); // Medium lightness for readability
 
         let hsl = Hsl::new(hue, saturation, lightness);
         let rgb: Srgb = hsl.into_color();
@@ -51,7 +51,7 @@ struct TaggedRange {
 }
 
 impl TaggedRange {
-    fn new(tag_name: String, range: Range<usize>, id: usize) -> Self {
+    fn new(tag_name: String, range: Range<usize>, _id: usize) -> Self {
         Self {
             tag_name,
             range,
@@ -65,6 +65,7 @@ struct BuffMonster {
     tags: Vec<Tag>,
     tagged_ranges: Vec<TaggedRange>,
     next_id: usize,
+    dark_mode: bool,
     #[serde(skip)]
     new_tag_name: String,
     #[serde(skip)]
@@ -79,6 +80,7 @@ impl Default for BuffMonster {
             tags: vec![],
             tagged_ranges: Vec::new(),
             next_id: 0,
+            dark_mode: true, // Default to dark mode
             new_tag_name: String::new(),
             selection: Default::default(),
         }
@@ -160,10 +162,26 @@ impl BuffMonster {
 
 impl eframe::App for BuffMonster {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Apply the theme
+        if self.dark_mode {
+            ctx.set_visuals(egui::Visuals::dark());
+        } else {
+            ctx.set_visuals(egui::Visuals::light());
+        }
+
         egui::SidePanel::right("tags_panel")
             .min_width(250.0)
             .show(ctx, |ui| {
-                ui.heading("Tags");
+                ui.horizontal(|ui| {
+                    ui.heading("Tags");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let theme_icon = if self.dark_mode { "☀" } else { "🌙" };
+                        if ui.button(theme_icon).on_hover_text("Toggle theme").clicked() {
+                            self.dark_mode = !self.dark_mode;
+                            let _ = self.save_to_disk();
+                        }
+                    });
+                });
                 ui.separator();
 
                 ui.horizontal(|ui| {
@@ -231,7 +249,8 @@ impl eframe::App for BuffMonster {
             let tagged_ranges = self.tagged_ranges.clone();
             let tags = self.tags.clone();
 
-            let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
+            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+                let text = text.as_str();
                 let mut layout_job = egui::text::LayoutJob::default();
                 layout_job.wrap.max_width = wrap_width;
 
@@ -288,7 +307,7 @@ impl eframe::App for BuffMonster {
                     );
                 }
 
-                ui.fonts(|f| f.layout_job(layout_job))
+                ui.fonts_mut(|f| f.layout_job(layout_job))
             };
 
             let output = egui::TextEdit::multiline(&mut self.buffer)
@@ -301,7 +320,7 @@ impl eframe::App for BuffMonster {
 
             if let Some(cursor_range) = output.cursor_range {
                 self.selection =
-                    cursor_range.primary.ccursor.index..cursor_range.secondary.ccursor.index;
+                    cursor_range.primary.index..cursor_range.secondary.index;
             }
 
             if output.response.changed() {
@@ -312,10 +331,10 @@ impl eframe::App for BuffMonster {
                         println!("key down");
 
                         if let Some(single) = range.single() {
-                            println!("Cursor at {}", single.ccursor.index);
+                            println!("Cursor at {}", single.index);
 
                             for tr in &mut self.tagged_ranges {
-                                if tr.range.contains(&single.ccursor.index) {
+                                if tr.range.contains(&single.index) {
                                     println!("need to replace {:?}", range);
                                     if keys_down.iter().nth(0) == Some(&Key::Backspace) {
                                         tr.range.end -= 1;
@@ -326,9 +345,8 @@ impl eframe::App for BuffMonster {
                             }
                         } else {
                             // multiple chars selected
-                            let cursor_range = range.as_ccursor_range();
-                            let sel_start = cursor_range.primary.index.min(cursor_range.secondary.index);
-                            let sel_end = cursor_range.primary.index.max(cursor_range.secondary.index);
+                            let sel_start = range.primary.index.min(range.secondary.index);
+                            let sel_end = range.primary.index.max(range.secondary.index);
                             let selected_range = sel_start..sel_end;
                             // Find and update tagged ranges that match or overlap the selection
                             for tr in &mut self.tagged_ranges {
