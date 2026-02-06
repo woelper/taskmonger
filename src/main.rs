@@ -105,8 +105,10 @@ impl BuffMonster {
         let path = Self::save_path();
         if path.exists() {
             let json = fs::read_to_string(&path)?;
-            let app: Self = serde_json::from_str(&json)?;
+            let mut app: Self = serde_json::from_str(&json)?;
             println!("Loaded state from {}", path.display());
+            // Clean up any invalid ranges that might have been saved
+            app.clean_invalid_ranges();
             Ok(app)
         } else {
             Err("Save file does not exist".into())
@@ -157,6 +159,23 @@ impl BuffMonster {
         self.tags.retain(|t| t.name != tag_name);
         self.tagged_ranges.retain(|tr| tr.tag_name != tag_name);
         let _ = self.save_to_disk();
+    }
+
+    fn clean_invalid_ranges(&mut self) {
+        let buffer_len = self.buffer.len();
+        // Remove ranges that are completely out of bounds or invalid
+        self.tagged_ranges.retain(|tr| {
+            tr.range.start < buffer_len && tr.range.end <= buffer_len && tr.range.start < tr.range.end
+        });
+        // Clamp ranges that extend beyond the buffer
+        for tr in &mut self.tagged_ranges {
+            if tr.range.end > buffer_len {
+                tr.range.end = buffer_len;
+            }
+            if tr.range.start > buffer_len {
+                tr.range.start = buffer_len;
+            }
+        }
     }
 }
 
@@ -262,6 +281,11 @@ impl eframe::App for BuffMonster {
                 sorted_ranges.sort_by_key(|tr| tr.range.start);
 
                 for tr in sorted_ranges.iter() {
+                    // Skip ranges that overlap with already-rendered text
+                    if tr.range.start < last_pos {
+                        continue;
+                    }
+
                     if tr.range.start > last_pos && last_pos < text.len() {
                         let end = tr.range.start.min(text.len());
                         layout_job.append(
@@ -276,18 +300,19 @@ impl eframe::App for BuffMonster {
                     }
 
                     if tr.range.end <= text.len() {
-                        let color = tags
+                        let background_color = tags
                             .iter()
                             .find(|tag| tag.name == tr.tag_name)
                             .map(|tag| tag.to_color32())
-                            .unwrap_or(default_color);
+                            .unwrap_or(egui::Color32::TRANSPARENT).gamma_multiply(0.2);
 
                         layout_job.append(
                             &text[tr.range.clone()],
                             0.0,
                             egui::TextFormat {
                                 font_id: font_id.clone(),
-                                color,
+                                color: default_color,
+                                background: background_color,
                                 ..Default::default()
                             },
                         );
@@ -314,6 +339,7 @@ impl eframe::App for BuffMonster {
                 .desired_width(f32::INFINITY)
                 .desired_rows(30)
                 .lock_focus(true)
+                .frame(false)
                 .font(egui::TextStyle::Monospace)
                 .layouter(&mut layouter)
                 .show(ui);
@@ -379,7 +405,8 @@ impl eframe::App for BuffMonster {
                     }
                 }
 
-                // Auto-save on text changes
+                // Clean up invalid ranges and auto-save on text changes
+                self.clean_invalid_ranges();
                 let _ = self.save_to_disk();
             }
         });
