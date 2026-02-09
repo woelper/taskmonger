@@ -1,10 +1,10 @@
 use eframe::egui;
-use egui::Key;
+use egui::{vec2, Key, Sense, TextBuffer};
 use palette::{Hsl, IntoColor, Srgb};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::ops::Range;
 use std::fs;
+use std::ops::Range;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +44,7 @@ impl Tag {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 struct TaggedRange {
     tag_name: String,
     range: Range<usize>,
@@ -52,10 +52,7 @@ struct TaggedRange {
 
 impl TaggedRange {
     fn new(tag_name: String, range: Range<usize>, _id: usize) -> Self {
-        Self {
-            tag_name,
-            range,
-        }
+        Self { tag_name, range }
     }
 }
 
@@ -143,15 +140,53 @@ impl BuffMonster {
         };
 
         if range.start < range.end && range.end <= self.buffer.len() {
-            let tagged_range = TaggedRange::new(tag_name.to_string(), range, self.next_id);
-            self.next_id += 1;
-            self.tagged_ranges.push(tagged_range);
+            // Check if this range is fully enclosed in an existing tag of the same name
+            let is_enclosed = self.tagged_ranges.iter().any(|tr| {
+                tr.tag_name == tag_name
+                    && tr.range.start <= range.start
+                    && tr.range.end >= range.end
+            });
+
+            if is_enclosed {
+                // Already fully tagged, don't create a duplicate
+                return;
+            }
+
+            // Check for overlapping ranges with the same tag and merge them
+            let mut merged = false;
+            for tr in &mut self.tagged_ranges {
+                if tr.tag_name == tag_name {
+                    // Check if ranges overlap or are adjacent
+                    let overlaps = (range.start <= tr.range.end && range.end >= tr.range.start)
+                        || (range.start == tr.range.end || range.end == tr.range.start);
+
+                    if overlaps {
+                        // Merge by extending the existing range
+                        tr.range.start = tr.range.start.min(range.start);
+                        tr.range.end = tr.range.end.max(range.end);
+                        merged = true;
+                        break;
+                    }
+                }
+            }
+
+            if !merged {
+                // No overlap found, create a new tagged range
+                let tagged_range = TaggedRange::new(tag_name.to_string(), range, self.next_id);
+                self.next_id += 1;
+                self.tagged_ranges.push(tagged_range);
+            }
+
             let _ = self.save_to_disk();
         }
     }
 
-    fn delete_tagged_range(&mut self, name: &str) {
-        self.tagged_ranges.retain(|t| t.tag_name != name);
+    fn delete_tagged_range(&mut self, range: &TaggedRange) {
+        // self.tagged_ranges
+        //     .retain(|t| t.tag_name != range.tag_name && t.range != range.range);
+        
+        self.tagged_ranges
+            .retain(|t| t != range);
         let _ = self.save_to_disk();
     }
 
@@ -165,7 +200,9 @@ impl BuffMonster {
         let buffer_len = self.buffer.len();
         // Remove ranges that are completely out of bounds or invalid
         self.tagged_ranges.retain(|tr| {
-            tr.range.start < buffer_len && tr.range.end <= buffer_len && tr.range.start < tr.range.end
+            tr.range.start < buffer_len
+                && tr.range.end <= buffer_len
+                && tr.range.start < tr.range.end
         });
         // Clamp ranges that extend beyond the buffer
         for tr in &mut self.tagged_ranges {
@@ -195,7 +232,11 @@ impl eframe::App for BuffMonster {
                     ui.heading("Tags");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let theme_icon = if self.dark_mode { "☀" } else { "🌙" };
-                        if ui.button(theme_icon).on_hover_text("Toggle theme").clicked() {
+                        if ui
+                            .button(theme_icon)
+                            .on_hover_text("Toggle theme")
+                            .clicked()
+                        {
                             self.dark_mode = !self.dark_mode;
                             let _ = self.save_to_disk();
                         }
@@ -244,20 +285,39 @@ impl eframe::App for BuffMonster {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for tr in self.tagged_ranges.clone().iter() {
                         ui.group(|ui| {
+                            ui.allocate_at_least(vec2(ui.available_width(), 0.), Sense::empty());
+
+                            let preview: String = self
+                                .buffer
+                                .chars()
+                                .skip(tr.range.start)
+                                .take(tr.range.end - tr.range.start)
+                                .take(30)
+                                .collect();
+
                             if let Some(tag) = self.get_tag(&tr.tag_name) {
                                 let color = tag.to_color32();
                                 ui.label(
-                                    egui::RichText::new(format!("{}", tr.tag_name)).color(color),
+                                    egui::RichText::new(format!("{}: {}", tr.tag_name, preview))
+                                        .color(color),
                                 );
+                            } else {
+                                ui.label(format!("{}: {}", tr.tag_name, preview));
                             }
 
-                            if tr.range.end <= self.buffer.len() {
-                                ui.label(format!("{:?}", tr.range));
+                            #[cfg(debug_assertions)]
+                            {
+                                ui.label(format!("{}: {:?}", tr.tag_name, tr.range));
                             }
 
-                            if ui.small_button("Delete").clicked() {
-                                self.delete_tagged_range(&tr.tag_name);
-                            }
+                            ui.horizontal(|ui| {
+                                // if ui.small_button("Select").clicked() {
+                                //     self.selection = tr.range.clone();
+                                // }
+                                if ui.small_button("Delete").clicked() {
+                                    self.delete_tagged_range(&tr);
+                                }
+                            });
                         });
                         ui.add_space(5.0);
                     }
@@ -304,7 +364,8 @@ impl eframe::App for BuffMonster {
                             .iter()
                             .find(|tag| tag.name == tr.tag_name)
                             .map(|tag| tag.to_color32())
-                            .unwrap_or(egui::Color32::TRANSPARENT).gamma_multiply(0.2);
+                            .unwrap_or(egui::Color32::TRANSPARENT)
+                            .gamma_multiply(0.2);
 
                         layout_job.append(
                             &text[tr.range.clone()],
@@ -335,18 +396,20 @@ impl eframe::App for BuffMonster {
                 ui.fonts_mut(|f| f.layout_job(layout_job))
             };
 
-            let output = egui::TextEdit::multiline(&mut self.buffer)
-                .desired_width(f32::INFINITY)
-                .desired_rows(30)
-                .lock_focus(true)
-                .frame(false)
-                .font(egui::TextStyle::Monospace)
-                .layouter(&mut layouter)
-                .show(ui);
+            let output = egui::ScrollArea::vertical()
+                .show(ui, |ui| {
+                    egui::TextEdit::multiline(&mut self.buffer)
+                        .desired_width(f32::INFINITY)
+                        .lock_focus(true)
+                        .frame(false)
+                        .font(egui::TextStyle::Monospace)
+                        .layouter(&mut layouter)
+                        .show(ui)
+                })
+                .inner;
 
             if let Some(cursor_range) = output.cursor_range {
-                self.selection =
-                    cursor_range.primary.index..cursor_range.secondary.index;
+                self.selection = cursor_range.primary.index..cursor_range.secondary.index;
             }
 
             if output.response.changed() {
@@ -380,28 +443,32 @@ impl eframe::App for BuffMonster {
                                 if tr.range == selected_range {
                                     println!("Updating tagged range {:?} for selection", tr.range);
 
-                 
                                     if keys_down.iter().nth(0) == Some(&Key::Backspace) {
                                         tr.range = sel_start..sel_start;
                                     } else {
                                         tr.range = sel_start..(sel_start + 1);
                                     }
-                                } else if tr.range.contains(&sel_start) && tr.range.contains(&(sel_end.saturating_sub(1))) {
+                                } else if tr.range.contains(&sel_start)
+                                    && tr.range.contains(&(sel_end.saturating_sub(1)))
+                                {
                                     // Tagged range contains the selection - adjust the end
                                     let selection_len = sel_end - sel_start;
-                                    println!("Adjusting tagged range {:?} that contains selection", tr.range);
+                                    println!(
+                                        "Adjusting tagged range {:?} that contains selection",
+                                        tr.range
+                                    );
 
                                     if keys_down.iter().nth(0) == Some(&Key::Backspace) {
                                         // Selection deleted, no replacement
                                         tr.range.end = tr.range.end.saturating_sub(selection_len);
                                     } else {
                                         // Selection replaced with 1 character
-                                        tr.range.end = tr.range.end.saturating_sub(selection_len - 1);
+                                        tr.range.end =
+                                            tr.range.end.saturating_sub(selection_len - 1);
                                     }
                                 }
                             }
                         }
-
                     }
                 }
 
