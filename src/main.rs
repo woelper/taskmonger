@@ -5,45 +5,31 @@ use egui_phosphor::regular::*;
 use palette::{Hsl, IntoColor, Srgb};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Tag {
-    name: String,
-    color: [u8; 3],
+fn random_color() -> [u8; 3] {
+    let mut rng = rand::rng();
+
+    // Generate color in HSL space for better perceptual distribution
+    let hue = rng.random_range(0.0..360.0);
+    let saturation = rng.random_range(0.5..0.8); // Medium to high saturation
+    let lightness = rng.random_range(0.5..0.7); // Medium lightness for readability
+
+    let hsl = Hsl::new(hue, saturation, lightness);
+    let rgb: Srgb = hsl.into_color();
+
+    [
+        (rgb.red * 255.0) as u8,
+        (rgb.green * 255.0) as u8,
+        (rgb.blue * 255.0) as u8,
+    ]
 }
 
-impl Tag {
-    fn new(name: String) -> Self {
-        Self {
-            name,
-            color: Self::random_color(),
-        }
-    }
-
-    fn random_color() -> [u8; 3] {
-        let mut rng = rand::rng();
-
-        // Generate color in HSL space for better perceptual distribution
-        let hue = rng.random_range(0.0..360.0);
-        let saturation = rng.random_range(0.5..0.8); // Medium to high saturation
-        let lightness = rng.random_range(0.5..0.7); // Medium lightness for readability
-
-        let hsl = Hsl::new(hue, saturation, lightness);
-        let rgb: Srgb = hsl.into_color();
-
-        [
-            (rgb.red * 255.0) as u8,
-            (rgb.green * 255.0) as u8,
-            (rgb.blue * 255.0) as u8,
-        ]
-    }
-
-    fn to_color32(&self) -> egui::Color32 {
-        egui::Color32::from_rgb(self.color[0], self.color[1], self.color[2])
-    }
+fn to_color32(c: [u8; 3]) -> egui::Color32 {
+    egui::Color32::from_rgb(c[0], c[1], c[2])
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
@@ -61,7 +47,9 @@ impl TaggedRange {
 #[derive(Serialize, Deserialize)]
 struct BuffMonster {
     buffer: String,
-    tags: Vec<Tag>,
+    #[serde(default)]
+    tags: HashMap<String, [u8; 3]>,
+    #[serde(default)]
     tagged_ranges: Vec<TaggedRange>,
     // next_id: usize,
     dark_mode: bool,
@@ -74,9 +62,12 @@ struct BuffMonster {
 impl Default for BuffMonster {
     fn default() -> Self {
         Self {
-            buffer: "Welcome to BuffMonster!\n\nCreate tags and apply them to text ranges.\n"
-                .to_string(),
-            tags: vec![],
+            buffer: format!(
+                "Welcome to {}! \n\nJust start typing here and tag your things.",
+                env!("CARGO_PKG_NAME")
+            )
+            .to_string(),
+            tags: Default::default(),
             tagged_ranges: Vec::new(),
             // next_id: 0,
             dark_mode: true, // Default to dark mode
@@ -124,14 +115,12 @@ impl BuffMonster {
 
     fn add_tag(&mut self, name: String) {
         let name = name.trim().to_string();
-        if !name.is_empty() && !self.tags.iter().any(|t| t.name == name) {
-            self.tags.push(Tag::new(name));
-            let _ = self.save_to_disk();
-        }
+        self.tags.insert(name, random_color());
+        let _ = self.save_to_disk();
     }
 
-    fn get_tag(&self, name: &str) -> Option<&Tag> {
-        self.tags.iter().find(|t| t.name == name)
+    fn get_tag(&self, name: &str) -> Option<&[u8; 3]> {
+        self.tags.get(name)
     }
 
     fn apply_tag_to_selection(&mut self, tag_name: &str) {
@@ -188,7 +177,7 @@ impl BuffMonster {
     }
 
     fn delete_tag(&mut self, tag_name: &str) {
-        self.tags.retain(|t| t.name != tag_name);
+        self.tags.remove(tag_name);
         self.tagged_ranges.retain(|tr| tr.tag_name != tag_name);
         let _ = self.save_to_disk();
     }
@@ -260,17 +249,17 @@ impl eframe::App for BuffMonster {
                     .id_salt("tags")
                     .max_height(150.0)
                     .show(ui, |ui| {
-                        for tag in tags_clone.iter() {
+                        for (tag, c) in tags_clone.iter() {
                             ui.horizontal(|ui| {
-                                let color = tag.to_color32();
+                                let color = to_color32(*c);
                                 let button = egui::Button::new(
-                                    egui::RichText::new(format!("{}", tag.name)).color(color),
+                                    egui::RichText::new(format!("{}", tag)).color(color),
                                 );
                                 if ui.add(button).clicked() {
-                                    self.apply_tag_to_selection(&tag.name);
+                                    self.apply_tag_to_selection(&tag);
                                 }
                                 if ui.small_button("x").clicked() {
-                                    self.delete_tag(&tag.name);
+                                    self.delete_tag(&tag);
                                 }
                             });
                         }
@@ -303,10 +292,8 @@ impl eframe::App for BuffMonster {
                                     .take(30)
                                     .collect();
 
-                                if let Some(tag) =
-                                    &self.tags.iter().find(|t| t.name == item.tag_name)
-                                {
-                                    let color = tag.to_color32();
+                                if let Some(col) = &self.tags.get(&item.tag_name) {
+                                    let color = to_color32(**col);
                                     ui.label(
                                         egui::RichText::new(format!(
                                             "{}: {}",
@@ -374,9 +361,8 @@ impl eframe::App for BuffMonster {
 
                     if tr.range.end <= text.len() {
                         let background_color = tags
-                            .iter()
-                            .find(|tag| tag.name == tr.tag_name)
-                            .map(|tag| tag.to_color32())
+                            .get(&tr.tag_name)
+                            .map(|tag| to_color32(*tag))
                             .unwrap_or(egui::Color32::TRANSPARENT)
                             .gamma_multiply(0.2);
 
