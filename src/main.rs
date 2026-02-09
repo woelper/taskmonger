@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui::{vec2, Key, Sense, TextBuffer};
+use egui::{Key, Layout, Sense, vec2};
 use palette::{Hsl, IntoColor, Srgb};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -48,11 +48,12 @@ impl Tag {
 struct TaggedRange {
     tag_name: String,
     range: Range<usize>,
+    prio: i8
 }
 
 impl TaggedRange {
-    fn new(tag_name: String, range: Range<usize>, _id: usize) -> Self {
-        Self { tag_name, range }
+    fn new(tag_name: String, range: Range<usize>) -> Self {
+        Self { tag_name, range, prio: 0}
     }
 }
 
@@ -61,7 +62,7 @@ struct BuffMonster {
     buffer: String,
     tags: Vec<Tag>,
     tagged_ranges: Vec<TaggedRange>,
-    next_id: usize,
+    // next_id: usize,
     dark_mode: bool,
     #[serde(skip)]
     new_tag_name: String,
@@ -76,7 +77,7 @@ impl Default for BuffMonster {
                 .to_string(),
             tags: vec![],
             tagged_ranges: Vec::new(),
-            next_id: 0,
+            // next_id: 0,
             dark_mode: true, // Default to dark mode
             new_tag_name: String::new(),
             selection: Default::default(),
@@ -172,8 +173,7 @@ impl BuffMonster {
 
             if !merged {
                 // No overlap found, create a new tagged range
-                let tagged_range = TaggedRange::new(tag_name.to_string(), range, self.next_id);
-                self.next_id += 1;
+                let tagged_range = TaggedRange::new(tag_name.to_string(), range);
                 self.tagged_ranges.push(tagged_range);
             }
 
@@ -182,11 +182,7 @@ impl BuffMonster {
     }
 
     fn delete_tagged_range(&mut self, range: &TaggedRange) {
-        // self.tagged_ranges
-        //     .retain(|t| t.tag_name != range.tag_name && t.range != range.range);
-        
-        self.tagged_ranges
-            .retain(|t| t != range);
+        self.tagged_ranges.retain(|t| t != range);
         let _ = self.save_to_disk();
     }
 
@@ -283,10 +279,9 @@ impl eframe::App for BuffMonster {
                 ui.label("Tagged ranges:");
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
+                    let sorted_ranges = self.tagged_ranges.sort_by(|a,b| b.prio.cmp(&a.prio));
                     for tr in self.tagged_ranges.clone().iter() {
-                        ui.group(|ui| {
                             ui.allocate_at_least(vec2(ui.available_width(), 0.), Sense::empty());
-
                             let preview: String = self
                                 .buffer
                                 .chars()
@@ -295,31 +290,39 @@ impl eframe::App for BuffMonster {
                                 .take(30)
                                 .collect();
 
-                            if let Some(tag) = self.get_tag(&tr.tag_name) {
-                                let color = tag.to_color32();
-                                ui.label(
-                                    egui::RichText::new(format!("{}: {}", tr.tag_name, preview))
-                                        .color(color),
-                                );
-                            } else {
-                                ui.label(format!("{}: {}", tr.tag_name, preview));
-                            }
-
-                            #[cfg(debug_assertions)]
-                            {
-                                ui.label(format!("{}: {:?}", tr.tag_name, tr.range));
-                            }
-
                             ui.horizontal(|ui| {
-                                // if ui.small_button("Select").clicked() {
-                                //     self.selection = tr.range.clone();
-                                // }
-                                if ui.small_button("Delete").clicked() {
-                                    self.delete_tagged_range(&tr);
+                                if let Some(tag) = self.get_tag(&tr.tag_name) {
+                                    let color = tag.to_color32();
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}: {}",
+                                            tr.tag_name, preview
+                                        ))
+                                        .color(color),
+                                    );
+                                } else {
+                                    ui.label(format!("{}: {}", tr.tag_name, preview));
                                 }
+                                
+                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui|{
+                                   let mut prio = tr.prio;
+                                    if ui.add(egui::DragValue::new(&mut prio).range(0..=10)).changed() {
+                                       for r in self.tagged_ranges.iter_mut() {
+                                           if r == tr {
+                                               r.prio = prio;
+                                           }
+                                       }
+                                   }
+                                   
+                                    // TODO: add button to scroll to this range 
+                                    if ui.small_button("Delete").clicked() {
+                                        self.delete_tagged_range(&tr);
+                                    }
+                                });
+
+                           
                             });
-                        });
-                        ui.add_space(5.0);
+                        
                     }
                 });
             });
