@@ -1,5 +1,7 @@
 use eframe::egui;
-use egui::{Key, Layout, Sense, vec2};
+use egui::{Key, Layout};
+use egui_dnd::dnd;
+use egui_phosphor::regular::*;
 use palette::{Hsl, IntoColor, Srgb};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -44,16 +46,15 @@ impl Tag {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct TaggedRange {
     tag_name: String,
     range: Range<usize>,
-    prio: i8
 }
 
 impl TaggedRange {
     fn new(tag_name: String, range: Range<usize>) -> Self {
-        Self { tag_name, range, prio: 0}
+        Self { tag_name, range }
     }
 }
 
@@ -279,51 +280,60 @@ impl eframe::App for BuffMonster {
                 ui.label("Tagged ranges:");
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    let sorted_ranges = self.tagged_ranges.sort_by(|a,b| b.prio.cmp(&a.prio));
-                    for tr in self.tagged_ranges.clone().iter() {
-                            ui.allocate_at_least(vec2(ui.available_width(), 0.), Sense::empty());
-                            let preview: String = self
-                                .buffer
-                                .chars()
-                                .skip(tr.range.start)
-                                .take(tr.range.end - tr.range.start)
-                                .take(30)
-                                .collect();
+                    let mut delete_tr: Option<TaggedRange> = None;
 
+                    dnd(ui, "dnd_example").show_vec(
+                        &mut self.tagged_ranges,
+                        |ui, item, handle, state| {
                             ui.horizontal(|ui| {
-                                if let Some(tag) = self.get_tag(&tr.tag_name) {
+                                handle.ui(ui, |ui| {
+                                    if state.dragged {
+                                        ui.label("-");
+                                    } else {
+                                        ui.label(DOTS_SIX_VERTICAL);
+                                    }
+                                });
+
+                                let preview: String = self
+                                    .buffer
+                                    .chars()
+                                    .skip(item.range.start)
+                                    .take(item.range.end - item.range.start)
+                                    .take_while(|c| c != &'\n')
+                                    .take(30)
+                                    .collect();
+
+                                if let Some(tag) =
+                                    &self.tags.iter().find(|t| t.name == item.tag_name)
+                                {
                                     let color = tag.to_color32();
                                     ui.label(
                                         egui::RichText::new(format!(
                                             "{}: {}",
-                                            tr.tag_name, preview
+                                            item.tag_name, preview
                                         ))
                                         .color(color),
                                     );
                                 } else {
-                                    ui.label(format!("{}: {}", tr.tag_name, preview));
+                                    ui.label(format!("{}: {}", item.tag_name, preview));
                                 }
-                                
-                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui|{
-                                   let mut prio = tr.prio;
-                                    if ui.add(egui::DragValue::new(&mut prio).range(0..=10)).changed() {
-                                       for r in self.tagged_ranges.iter_mut() {
-                                           if r == tr {
-                                               r.prio = prio;
-                                           }
-                                       }
-                                   }
-                                   
-                                    // TODO: add button to scroll to this range 
-                                    if ui.small_button("Delete").clicked() {
-                                        self.delete_tagged_range(&tr);
-                                    }
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(
+                                        Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            // TODO: add button to scroll to this range
+                                            if ui.small_button(TRASH).clicked() {
+                                                delete_tr = Some(item.clone());
+                                            }
+                                        },
+                                    );
                                 });
-
-                           
                             });
-                        
-                    }
+                        },
+                    );
+                    if let Some(r) = delete_tr {
+                        self.delete_tagged_range(&r);
+                    };
                 });
             });
 
@@ -491,9 +501,16 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
 
+    let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+
     eframe::run_native(
         "BuffMonster",
         native_options,
-        Box::new(|cc| Ok(Box::new(BuffMonster::new(cc)))),
+        Box::new(|cc| {
+            cc.egui_ctx.set_fonts(fonts);
+
+            Ok(Box::new(BuffMonster::new(cc)))
+        }),
     )
 }
