@@ -55,8 +55,12 @@ struct BuffMonster {
     tagged_ranges: Vec<TaggedRange>,
     // next_id: usize,
     dark_mode: bool,
+    #[serde(default)]
+    markdown_view_enabled: bool,
     #[serde(skip)]
     selection: Range<usize>,
+    #[serde(skip)]
+    markdown_cache: HashMap<String, egui_commonmark::CommonMarkCache>,
 }
 
 impl Default for BuffMonster {
@@ -70,7 +74,9 @@ impl Default for BuffMonster {
             tags: Default::default(),
             tagged_ranges: Vec::new(),
             dark_mode: true, // Default to dark mode
+            markdown_view_enabled: false,
             selection: Default::default(),
+            markdown_cache: HashMap::new(),
         }
     }
 }
@@ -233,6 +239,15 @@ impl eframe::App for BuffMonster {
                             self.dark_mode = !self.dark_mode;
                             let _ = self.save_to_disk();
                         }
+
+                        if ui
+                            .button(FILE_MD)
+                            .on_hover_text("Toggle markdown view")
+                            .clicked()
+                        {
+                            self.markdown_view_enabled = !self.markdown_view_enabled;
+                            let _ = self.save_to_disk();
+                        }
                     });
                 });
                 ui.separator();
@@ -379,6 +394,49 @@ impl eframe::App for BuffMonster {
                     };
                 });
             });
+
+        // Markdown view panel (conditional, on the right side of text edit)
+        if self.markdown_view_enabled {
+            egui::SidePanel::right("markdown_view_panel")
+                .resizable(true)
+                .default_width(300.0)
+                .min_width(200.0)
+                .show(ctx, |ui| {
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Sort tagged ranges by their position in the buffer
+                       
+
+                        for tr in &self.tagged_ranges {
+                            if tr.range.end <= self.buffer.len() {
+                                let text = &self.buffer[tr.range.clone()];
+
+                                ui.group(|ui| {
+                                    // Show tag name header with color
+                                    if let Some(col) = self.tags.get(&tr.tag_name) {
+                                        let color = to_color32(*col);
+                                        ui.label(egui::RichText::new(&tr.tag_name).color(color).strong());
+                                    } else {
+                                        ui.label(egui::RichText::new(&tr.tag_name).strong());
+                                    }
+
+                                    ui.separator();
+
+                                    // Get or create cache for this tagged range
+                                    let cache_key = format!("{}:{}-{}", tr.tag_name, tr.range.start, tr.range.end);
+                                    let cache = self.markdown_cache
+                                        .entry(cache_key)
+                                        .or_insert_with(egui_commonmark::CommonMarkCache::default);
+
+                                    // Render markdown
+                                    egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+                                });
+                                ui.add_space(10.0);
+                            }
+                        }
+                    });
+                });
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let tagged_ranges = self.tagged_ranges.clone();
