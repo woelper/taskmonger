@@ -1,12 +1,14 @@
 use eframe::egui;
-use egui::{Key, Layout};
+use egui::containers::menu::MenuConfig;
+use egui::{color_picker, Button, Color32, Key, Layout};
 use egui_dnd::dnd;
 use egui_phosphor::regular::*;
 use palette::{Hsl, IntoColor, Srgb};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::ops::Range;
 use std::path::PathBuf;
 
@@ -54,8 +56,6 @@ struct BuffMonster {
     // next_id: usize,
     dark_mode: bool,
     #[serde(skip)]
-    new_tag_name: String,
-    #[serde(skip)]
     selection: Range<usize>,
 }
 
@@ -69,9 +69,7 @@ impl Default for BuffMonster {
             .to_string(),
             tags: Default::default(),
             tagged_ranges: Vec::new(),
-            // next_id: 0,
             dark_mode: true, // Default to dark mode
-            new_tag_name: String::new(),
             selection: Default::default(),
         }
     }
@@ -86,6 +84,7 @@ impl BuffMonster {
 
     fn save_to_disk(&self) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string_pretty(self)?;
+        fs::write("backup.txt", &self.buffer)?;
         fs::write(Self::save_path(), json)?;
         println!("Saved state to {}", Self::save_path().display());
         Ok(())
@@ -108,8 +107,20 @@ impl BuffMonster {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Try to load from disk, fallback to default
         Self::load_from_disk().unwrap_or_else(|e| {
-            println!("No saved state found ({}), starting fresh", e);
-            Self::default()
+            eprintln!("No saved state found ({}), starting fresh", e);
+
+            let mut def = Self::default();
+            if PathBuf::from("backup.txt").exists() {
+                let mut buf: String = Default::default();
+                if let Ok(mut f) = File::open(PathBuf::from("backup.txt")) {
+                    _ = f.read_to_string(&mut buf);
+                    if !buf.is_empty() {
+                        eprintln!("Recovered backup");
+                        def.buffer = buf;
+                    }
+                }
+            }
+            def
         })
     }
 
@@ -117,10 +128,6 @@ impl BuffMonster {
         let name = name.trim().to_string();
         self.tags.insert(name, random_color());
         let _ = self.save_to_disk();
-    }
-
-    fn get_tag(&self, name: &str) -> Option<&[u8; 3]> {
-        self.tags.get(name)
     }
 
     fn apply_tag_to_selection(&mut self, tag_name: &str) {
@@ -230,37 +237,86 @@ impl eframe::App for BuffMonster {
                 });
                 ui.separator();
 
-                ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut self.new_tag_name);
-                    if !self.new_tag_name.is_empty() {
-                        if ui.button("+").clicked() {
-                            self.add_tag(self.new_tag_name.clone());
-                            self.new_tag_name.clear();
+                // Tag adding
+                if ui.button("Add tag").clicked() {
+                    // ctx.memory_mut(|w| w.data.insert_temp("tag_open".into(), true));
+                    ctx.memory_mut(|w| w.data.insert_temp("tag".into(), "".to_string()));
+                }
+
+                let tag = ctx.memory(|r| r.data.get_temp::<String>("tag".into()));
+
+                if let Some(tag) = tag {
+                    egui::Modal::new("Tags".into()).show(ctx, |ui| {
+                        ui.set_width(200.0);
+                        ui.heading("Add tag");
+                        let mut tag_name = tag.clone();
+                        if ui.text_edit_singleline(&mut tag_name).changed() {
+                            ctx.memory_mut(|w| w.data.insert_temp("tag".into(), tag_name.clone()));
                         }
-                    } else {
-                        ui.label("Add a tag");
-                    }
-                });
 
-                ui.separator();
+                        if ui.button("Add").clicked() {
+                            self.add_tag(tag_name);
+                            ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
+                        }
 
-                let tags_clone = self.tags.clone();
+                        if ui.button("Cancel").clicked() {
+                            ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
+                        }
+
+                        ui.add_space(32.0);
+                    });
+                }
+
+                // ui.allocate_space(dezsired_size)
+
                 egui::ScrollArea::vertical()
                     .id_salt("tags")
                     .max_height(150.0)
+                    .min_scrolled_width(222.)
                     .show(ui, |ui| {
-                        for (tag, c) in tags_clone.iter() {
-                            ui.horizontal(|ui| {
-                                let color = to_color32(*c);
-                                let button = egui::Button::new(
+                        for (tag, c) in self.tags.clone() {
+                            ui.horizontal_wrapped(|ui| {
+                                let color = to_color32(c);
+                                let button = ui.add(egui::Button::new(
                                     egui::RichText::new(format!("{}", tag)).color(color),
-                                );
-                                if ui.add(button).clicked() {
-                                    self.apply_tag_to_selection(&tag);
-                                }
-                                if ui.small_button("x").clicked() {
-                                    self.delete_tag(&tag);
-                                }
+                                ));
+
+                                let p = egui::Popup::from_toggle_button_response(&button);
+                                p.show(|ui| {
+                                    if !self.selection.is_empty() {
+                                        if ui.button("Assign to selection").clicked() {
+                                            self.apply_tag_to_selection(&tag);
+                                        }
+                                    } else {
+                                        ui.label("Select something to assign this tag.");
+                                    }
+                                    let mut srgba = Color32::from_rgb(c[0], c[1], c[2]);
+                                    let button = Button::new(format!("Color {ARROW_RIGHT}"))
+                                        .fill(srgba.gamma_multiply(0.3));
+                                    use egui::containers::menu::SubMenuButton;
+                                    SubMenuButton::from_button(button)
+                                        .config(MenuConfig::new().close_behavior(
+                                            egui::PopupCloseBehavior::CloseOnClickOutside,
+                                        ))
+                                        .ui(ui, |ui| {
+                                            ui.spacing_mut().slider_width = 200.0;
+                                            if color_picker::color_picker_color32(
+                                                ui,
+                                                &mut srgba,
+                                                color_picker::Alpha::Opaque,
+                                            ) {
+                                                if let Some(t) = self.tags.get_mut(&tag) {
+                                                    t[0] = srgba.r();
+                                                    t[1] = srgba.g();
+                                                    t[2] = srgba.b();
+                                                }
+                                            }
+                                        });
+
+                                    if ui.button(TRASH).clicked() {
+                                        self.delete_tag(&tag);
+                                    }
+                                });
                             });
                         }
                     });
