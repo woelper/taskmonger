@@ -1,10 +1,11 @@
+use chrono;
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
 use egui::{color_picker, Button, Color32, Key, Layout, RichText};
 use egui_dnd::dnd;
 use egui_phosphor::regular::*;
 use palette::{Hsl, IntoColor, Srgb};
-use rand::Rng;
+use rand::{random, Rng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -31,22 +32,9 @@ impl RangeExt for Range<usize> {
     }
 }
 
-fn random_color() -> [u8; 3] {
-    let mut rng = rand::rng();
-
-    // Generate color in HSL space for better perceptual distribution
-    let hue = rng.random_range(0.0..360.0);
-    let saturation = rng.random_range(0.5..0.8); // Medium to high saturation
-    let lightness = rng.random_range(0.5..0.7); // Medium lightness for readability
-
-    let hsl = Hsl::new(hue, saturation, lightness);
-    let rgb: Srgb = hsl.into_color();
-
-    [
-        (rgb.red * 255.0) as u8,
-        (rgb.green * 255.0) as u8,
-        (rgb.blue * 255.0) as u8,
-    ]
+fn random_color(num_existing: usize) -> [u8; 3] {
+    let c = colorous::WARM.eval_rational(num_existing, 40);
+    [c.r, c.g, c.b]
 }
 
 fn to_color32(c: [u8; 3]) -> egui::Color32 {
@@ -82,11 +70,17 @@ fn mix_colors(c1: Color32, c2: Color32) -> Color32 {
 struct TaggedRange {
     tag_name: String,
     range: Range<usize>,
+    #[serde(default)]
+    created: chrono::NaiveDateTime,
 }
 
 impl TaggedRange {
     fn new(tag_name: String, range: Range<usize>) -> Self {
-        Self { tag_name, range }
+        Self {
+            tag_name,
+            range,
+            created: chrono::Utc::now().naive_local(),
+        }
     }
 }
 
@@ -180,7 +174,7 @@ impl BuffMonster {
 
     fn add_tag(&mut self, name: String) {
         let name = name.trim().to_string();
-        self.tags.insert(name, random_color());
+        self.tags.insert(name, random_color(self.tags.len()));
         let _ = self.save_to_disk();
     }
 
@@ -310,6 +304,8 @@ impl eframe::App for BuffMonster {
                     });
                 }
 
+                let tag_len = self.tags.len();
+
                 egui::ScrollArea::vertical()
                     .id_salt("tags")
                     .max_height(150.0)
@@ -367,6 +363,11 @@ impl eframe::App for BuffMonster {
                                                 }
                                             }
                                         });
+                                    if ui.button("Rand col").clicked() {
+                                        if let Some(t) = self.tags.get_mut(&tag) {
+                                            *t = random_color(rand::random_range(0..40) as usize);
+                                        }
+                                    }
 
                                     if ui.button(TRASH).clicked() {
                                         self.delete_tag(&tag);
@@ -492,7 +493,7 @@ impl eframe::App for BuffMonster {
             for tr in &mut tagged_ranges {
                 if let Some(col) = tags.get(&tr.tag_name) {
                     for i in &mut tr.range {
-                        let x = Color32::from_rgb(col[0], col[1], col[2]);
+                        let x = to_color32(*col);
                         colormap
                             .entry(i)
                             .and_modify(|c| {

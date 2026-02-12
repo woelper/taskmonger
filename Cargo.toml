@@ -14,3 +14,5 @@ egui-phosphor = "0.11"
 egui_dnd = "0.14"
 egui_commonmark = "0.22"
 rangetools = "0.1.4"
+colorous = "1.0.16"
+chrono = { version = "0.4.43", features = ["serde"] }
