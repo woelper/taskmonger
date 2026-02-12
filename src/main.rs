@@ -418,7 +418,7 @@ impl eframe::App for BuffMonster {
             let mut tagged_ranges = self.tagged_ranges.clone();
             let tags = self.tags.clone();
 
-            //  make a colormap for all chars
+            //  make a default colormap for all chars
             let mut colormap: HashMap<usize, Color32> = Default::default();
             // go though all ranges. If color exists, mix it.
             for tr in &mut tagged_ranges {
@@ -444,25 +444,48 @@ impl eframe::App for BuffMonster {
                 let font_id = egui::FontId::monospace(14.0);
 
                 // TODO: if it is faster, collapse ranges so we need fewer layoutjobs
+                // TODO: expose this as setting later
+                let background = false;
 
                 for (i, c) in text.chars().enumerate() {
+                    let selected = self.selection.contains(&i);
+
                     if let Some(col) = colormap.get(&i) {
                         layout_job.append(
                             &c.to_string(),
                             0.0,
                             egui::TextFormat {
                                 font_id: font_id.clone(),
-                                color: col.clone(),
+                                color: if background {
+                                    default_color.clone()
+                                } else {
+                                    col.clone()
+                                },
+                                background: if selected {
+                                    Color32::RED
+                                } else {
+                                    if background {
+                                        col.clone()
+                                    } else {
+                                        Color32::from_white_alpha(0)
+                                    }
+                                },
                                 ..Default::default()
                             },
                         );
                     } else {
+                        // default text
                         layout_job.append(
                             &c.to_string(),
                             0.0,
                             egui::TextFormat {
                                 font_id: font_id.clone(),
                                 color: default_color.clone(),
+                                background: if selected {
+                                    Color32::RED
+                                } else {
+                                    Color32::from_white_alpha(0)
+                                },
                                 ..Default::default()
                             },
                         );
@@ -484,30 +507,27 @@ impl eframe::App for BuffMonster {
                 })
                 .inner;
 
-           
             // println!("sel len {}", self.selection.len());
 
             // let selection_len = output.state.cursor.char_range().unwrap_or_default().as_sorted_char_range().len() as i32;
             let selection_len = self.selection.len() as i32;
-            if let Some(cursor_range) = output.cursor_range {
-                self.selection = cursor_range.primary.index..cursor_range.secondary.index;
+
+            if let Some(cursor_range) = output.state.cursor.char_range() {
+                self.selection = cursor_range.as_sorted_char_range();
             }
             if output.response.changed() {
                 println!("len {selection_len}");
                 let mut shift: i32 = 0;
-                
+
                 if let Some(range) = output.cursor_range {
-                    
                     println!("Cursor range {:?}", range);
-                    
-                    
+
                     let keys_down = ctx.input(|i| i.keys_down.clone());
                     let delete = keys_down.iter().nth(0) == Some(&Key::Backspace);
 
                     if !keys_down.is_empty() {
                         println!("key down {:?}", keys_down);
 
-                        
                         // No selection
                         if selection_len == 0 {
                             println!("Single range Cursor");
@@ -527,25 +547,15 @@ impl eframe::App for BuffMonster {
                         }
 
                         println!("shift {:?}", shift);
-                        
+
                         for tr in &mut self.tagged_ranges {
-                            
                             if tr.range.start > range.primary.index {
                                 tr.range.start = (tr.range.start as i32 + shift).abs() as usize;
                             }
-                            
+
                             if tr.range.end > range.primary.index {
-                                tr.range.end  = (tr.range.end as i32 + shift).abs() as usize;
+                                tr.range.end = (tr.range.end as i32 + shift).abs() as usize;
                             }
-                            
-                            // if tr.range.contains(&single.index) {
-                            //     println!("need to replace {:?}", range);
-                            //     if keys_down.iter().nth(0) == Some(&Key::Backspace) {
-                            //         tr.range.end -= 1;
-                            //     } else {
-                            //         tr.range.end += 1;
-                            //     }
-                            // }
                         }
                     }
                 }
