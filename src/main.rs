@@ -90,6 +90,15 @@ impl TaggedRange {
     }
 }
 
+#[derive(Serialize, Deserialize, Default)]
+struct Settings {
+    #[serde(default)]
+    dark_mode: bool,
+    #[serde(default)]
+    markdown_view_enabled: bool,
+    mark_as_background: bool,
+}
+
 #[derive(Serialize, Deserialize)]
 struct BuffMonster {
     buffer: String,
@@ -97,10 +106,7 @@ struct BuffMonster {
     tags: HashMap<String, [u8; 3]>,
     #[serde(default)]
     tagged_ranges: Vec<TaggedRange>,
-    // next_id: usize,
-    dark_mode: bool,
-    #[serde(default)]
-    markdown_view_enabled: bool,
+    settings: Settings,
     #[serde(skip)]
     selection: Range<usize>,
     #[serde(skip)]
@@ -117,8 +123,7 @@ impl Default for BuffMonster {
             .to_string(),
             tags: Default::default(),
             tagged_ranges: Vec::new(),
-            dark_mode: true, // Default to dark mode
-            markdown_view_enabled: false,
+            settings: Default::default(),
             selection: Default::default(),
             markdown_cache: HashMap::new(),
         }
@@ -232,7 +237,7 @@ impl BuffMonster {
 impl eframe::App for BuffMonster {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the theme
-        if self.dark_mode {
+        if self.settings.dark_mode {
             ctx.set_visuals(egui::Visuals::dark());
         } else {
             ctx.set_visuals(egui::Visuals::light());
@@ -244,13 +249,13 @@ impl eframe::App for BuffMonster {
                 ui.horizontal(|ui| {
                     ui.heading("Tags");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let theme_icon = if self.dark_mode { SUN } else { MOON };
+                        let theme_icon = if self.settings.dark_mode { SUN } else { MOON };
                         if ui
                             .button(theme_icon)
                             .on_hover_text("Toggle theme")
                             .clicked()
                         {
-                            self.dark_mode = !self.dark_mode;
+                            self.settings.dark_mode = !self.settings.dark_mode;
                             let _ = self.save_to_disk();
                         }
 
@@ -259,7 +264,8 @@ impl eframe::App for BuffMonster {
                             .on_hover_text("Toggle markdown view")
                             .clicked()
                         {
-                            self.markdown_view_enabled = !self.markdown_view_enabled;
+                            self.settings.markdown_view_enabled =
+                                !self.settings.markdown_view_enabled;
                             let _ = self.save_to_disk();
                         }
                     });
@@ -278,17 +284,29 @@ impl eframe::App for BuffMonster {
                         ui.set_width(200.0);
                         ui.heading("Add tag");
                         let mut tag_name = tag.clone();
-                        if ui.text_edit_singleline(&mut tag_name).changed() {
+                        let text_edit = ui.text_edit_singleline(&mut tag_name);
+
+                        if text_edit.changed() {
                             ctx.memory_mut(|w| w.data.insert_temp("tag".into(), tag_name.clone()));
                         }
-                        if ui.button("Add").clicked() {
-                            self.add_tag(tag_name);
-                            ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
-                        }
-                        if ui.button("Cancel").clicked() {
-                            ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
-                        }
-                        ui.add_space(32.0);
+                        ui.memory_mut(|w| w.request_focus(text_edit.id));
+
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
+                            }
+
+                            if ui.button("Add").clicked() {
+                                self.add_tag(tag_name.clone());
+                                ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
+                            }
+
+                            if ui.button("Add and assign").clicked() {
+                                self.apply_tag_to_selection(&tag);
+                                self.add_tag(tag_name);
+                                ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
+                            }
+                        });
                     });
                 }
 
@@ -418,7 +436,7 @@ impl eframe::App for BuffMonster {
             });
 
         // Markdown view panel (conditional, on the right side of text edit)
-        if self.markdown_view_enabled {
+        if self.settings.markdown_view_enabled {
             egui::SidePanel::right("markdown_view_panel")
                 .resizable(true)
                 .default_width(300.0)
@@ -495,7 +513,7 @@ impl eframe::App for BuffMonster {
 
                 // TODO: if it is faster, collapse ranges so we need fewer layoutjobs
                 // TODO: expose this as setting later
-                let background = false;
+                let background = self.settings.mark_as_background;
 
                 for (i, c) in text.chars().enumerate() {
                     let selected = self.selection.contains(&i);
