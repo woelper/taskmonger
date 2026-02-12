@@ -1,6 +1,6 @@
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
-use egui::{color_picker, Button, Color32, Key, Layout};
+use egui::{color_picker, Button, Color32, Key, Layout, RichText};
 use egui_dnd::dnd;
 use egui_phosphor::regular::*;
 use palette::{Hsl, IntoColor, Srgb};
@@ -51,6 +51,23 @@ fn random_color() -> [u8; 3] {
 
 fn to_color32(c: [u8; 3]) -> egui::Color32 {
     egui::Color32::from_rgb(c[0], c[1], c[2])
+}
+
+trait ReadableText {
+    /// Returns a grayscale color that is readable against `self` as a background.
+    fn readable_text_color(&self) -> Color32;
+}
+
+impl ReadableText for Color32 {
+    fn readable_text_color(&self) -> Color32 {
+        // Relative luminance using sRGB coefficients
+        let luminance = 0.299 * self.r() as f32 + 0.587 * self.g() as f32 + 0.114 * self.b() as f32;
+        if luminance > 150.0 {
+            Color32::from_gray(30)
+        } else {
+            Color32::from_gray(230)
+        }
+    }
 }
 
 fn mix_colors(c1: Color32, c2: Color32) -> Color32 {
@@ -251,7 +268,6 @@ impl eframe::App for BuffMonster {
 
                 // Tag adding
                 if ui.button("Add tag").clicked() {
-                    // ctx.memory_mut(|w| w.data.insert_temp("tag_open".into(), true));
                     ctx.memory_mut(|w| w.data.insert_temp("tag".into(), "".to_string()));
                 }
 
@@ -265,16 +281,13 @@ impl eframe::App for BuffMonster {
                         if ui.text_edit_singleline(&mut tag_name).changed() {
                             ctx.memory_mut(|w| w.data.insert_temp("tag".into(), tag_name.clone()));
                         }
-
                         if ui.button("Add").clicked() {
                             self.add_tag(tag_name);
                             ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
                         }
-
                         if ui.button("Cancel").clicked() {
                             ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
                         }
-
                         ui.add_space(32.0);
                     });
                 }
@@ -287,20 +300,34 @@ impl eframe::App for BuffMonster {
                         ui.horizontal_wrapped(|ui| {
                             for (tag, c) in self.tags.clone() {
                                 let color = to_color32(c);
-                                let button = ui.add(egui::Button::new(
-                                    egui::RichText::new(format!("{}", tag)).color(color),
-                                ));
+                                let button = ui.add(
+                                    egui::Button::new(
+                                        egui::RichText::new(format!("{}", tag))
+                                            .color(color.readable_text_color()),
+                                    )
+                                    .fill(color),
+                                );
 
                                 let p = egui::Popup::from_toggle_button_response(&button);
                                 p.show(|ui| {
+                                    let mut srgba = Color32::from_rgb(c[0], c[1], c[2]);
+
                                     if !self.selection.is_empty() {
-                                        if ui.button("Assign to selection").clicked() {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    RichText::new("Assign to selection")
+                                                        .color(srgba.readable_text_color()),
+                                                )
+                                                .fill(srgba),
+                                            )
+                                            .clicked()
+                                        {
                                             self.apply_tag_to_selection(&tag);
                                         }
                                     } else {
                                         ui.label("Select something to assign this tag.");
                                     }
-                                    let mut srgba = Color32::from_rgb(c[0], c[1], c[2]);
                                     let button = Button::new(format!("Color {ARROW_RIGHT}"))
                                         .fill(srgba.gamma_multiply(0.3));
                                     use egui::containers::menu::SubMenuButton;
@@ -472,6 +499,7 @@ impl eframe::App for BuffMonster {
 
                 for (i, c) in text.chars().enumerate() {
                     let selected = self.selection.contains(&i);
+                    let selected_color = ui.visuals().selection.bg_fill;
 
                     if let Some(col) = colormap.get(&i) {
                         layout_job.append(
@@ -480,12 +508,20 @@ impl eframe::App for BuffMonster {
                             egui::TextFormat {
                                 font_id: font_id.clone(),
                                 color: if background {
-                                    default_color.clone()
+                                    if selected {
+                                        ui.visuals().selection.stroke.color
+                                    } else {
+                                        default_color.clone()
+                                    }
                                 } else {
-                                    col.clone()
+                                    if selected {
+                                        ui.visuals().selection.stroke.color
+                                    } else {
+                                        col.clone()
+                                    }
                                 },
                                 background: if selected {
-                                    Color32::RED
+                                    selected_color
                                 } else {
                                     if background {
                                         col.clone()
@@ -503,9 +539,13 @@ impl eframe::App for BuffMonster {
                             0.0,
                             egui::TextFormat {
                                 font_id: font_id.clone(),
-                                color: default_color.clone(),
+                                color: if selected {
+                                    ui.visuals().selection.stroke.color
+                                } else {
+                                    default_color.clone()
+                                },
                                 background: if selected {
-                                    Color32::RED
+                                    selected_color
                                 } else {
                                     Color32::from_white_alpha(0)
                                 },
