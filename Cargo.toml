@@ -19,3 +19,10 @@ chrono = { version = "0.4.43", features = ["serde"] }
 image = "0.25.9"
 log = "0.4.29"
 env_logger = "0.11.9"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
