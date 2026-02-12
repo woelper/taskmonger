@@ -12,6 +12,26 @@ use std::io::Read;
 use std::ops::Range;
 use std::path::PathBuf;
 
+
+use std::cmp::{min, max};
+
+pub trait RangeExt {
+    fn intersects(&self, other: &Self) -> bool;
+    fn union(&self, other: &Self) -> Self;
+}
+
+impl RangeExt for Range<usize> {
+    // Check if ranges overlap
+    fn intersects(&self, other: &Self) -> bool {
+        self.start < other.end && other.start < self.end
+    }
+
+    // Returns the convex hull (the smallest range containing both)
+    fn union(&self, other: &Self) -> Self {
+        min(self.start, other.start)..max(self.end, other.end)
+    }
+}
+
 fn random_color() -> [u8; 3] {
     let mut rng = rand::rng();
 
@@ -144,19 +164,28 @@ impl BuffMonster {
     }
 
     fn apply_tag_to_selection(&mut self, tag_name: &str) {
-        let range = self.selection.clone();
+        let selection = self.selection.clone();
 
+        for tr in self.tagged_ranges.iter_mut() {
+            if tr.tag_name == tag_name {
+                if tr.range.intersects(&selection) {
+                    tr.range = tr.range.union(&selection);
+                }
+                return
+            }
+    
+        }
+        
+        
         // Just add the range
         self.tagged_ranges
-            .push(TaggedRange::new(tag_name.to_string(), range));
+            .push(TaggedRange::new(tag_name.to_string(), selection));
 
-        // Sanitize to handle overlaps and merging
-        self.sanitize_ranges();
 
         let _ = self.save_to_disk();
     }
 
-    fn sanitize_ranges(&mut self) {}
+
 
     fn delete_tagged_range(&mut self, range: &TaggedRange) {
         self.tagged_ranges.retain(|t| t != range);
@@ -507,9 +536,6 @@ impl eframe::App for BuffMonster {
                 })
                 .inner;
 
-            // println!("sel len {}", self.selection.len());
-
-            // let selection_len = output.state.cursor.char_range().unwrap_or_default().as_sorted_char_range().len() as i32;
             let selection_len = self.selection.len() as i32;
 
             if let Some(cursor_range) = output.state.cursor.char_range() {
