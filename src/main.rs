@@ -12,8 +12,7 @@ use std::io::Read;
 use std::ops::Range;
 use std::path::PathBuf;
 
-
-use std::cmp::{min, max};
+use std::cmp::{max, min};
 
 pub trait RangeExt {
     fn intersects(&self, other: &Self) -> bool;
@@ -170,22 +169,17 @@ impl BuffMonster {
             if tr.tag_name == tag_name {
                 if tr.range.intersects(&selection) {
                     tr.range = tr.range.union(&selection);
+                    return;
                 }
-                return
             }
-    
         }
-        
-        
+
         // Just add the range
         self.tagged_ranges
             .push(TaggedRange::new(tag_name.to_string(), selection));
 
-
         let _ = self.save_to_disk();
     }
-
-
 
     fn delete_tagged_range(&mut self, range: &TaggedRange) {
         self.tagged_ranges.retain(|t| t != range);
