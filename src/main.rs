@@ -91,7 +91,7 @@ struct Settings {
 }
 
 #[derive(Serialize, Deserialize)]
-struct BuffMonster {
+struct Taskmonger {
     buffer: String,
     #[serde(default)]
     tags: HashMap<String, [u8; 3]>,
@@ -104,7 +104,7 @@ struct BuffMonster {
     markdown_cache: HashMap<String, egui_commonmark::CommonMarkCache>,
 }
 
-impl Default for BuffMonster {
+impl Default for Taskmonger {
     fn default() -> Self {
         Self {
             buffer: format!(
@@ -121,11 +121,11 @@ impl Default for BuffMonster {
     }
 }
 
-impl BuffMonster {
+impl Taskmonger {
     fn save_path() -> PathBuf {
         // Save in the current directory for simplicity
         // Could use dirs crate for a proper config directory
-        PathBuf::from("buffmonster_state.json")
+        PathBuf::from("taskmonger_state.json")
     }
 
     fn save_to_disk(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -179,10 +179,9 @@ impl BuffMonster {
         let selection = self.selection.clone();
 
         for tr in self.tagged_ranges.iter_mut() {
-            if tr.tag_name == tag_name
-                && tr.range.intersects(&selection) {
-                    tr.range = tr.range.union(&selection);
-                    return;
+            if tr.tag_name == tag_name && tr.range.intersects(&selection) {
+                tr.range = tr.range.union(&selection);
+                return;
             }
         }
 
@@ -224,7 +223,7 @@ impl BuffMonster {
     }
 }
 
-impl eframe::App for BuffMonster {
+impl eframe::App for Taskmonger {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the theme
         if self.settings.dark_mode {
@@ -299,7 +298,6 @@ impl eframe::App for BuffMonster {
                         });
                     });
                 }
-
 
                 egui::ScrollArea::vertical()
                     .id_salt("tags")
@@ -463,10 +461,7 @@ impl eframe::App for BuffMonster {
                                         "{}:{}-{}",
                                         tr.tag_name, tr.range.start, tr.range.end
                                     );
-                                    let cache = self
-                                        .markdown_cache
-                                        .entry(cache_key)
-                                        .or_default();
+                                    let cache = self.markdown_cache.entry(cache_key).or_default();
 
                                     // Render markdown
                                     egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
@@ -620,11 +615,13 @@ impl eframe::App for BuffMonster {
 
                         for tr in &mut self.tagged_ranges {
                             if tr.range.start > range.primary.index {
-                                tr.range.start = (tr.range.start as i32 + shift).unsigned_abs() as usize;
+                                tr.range.start =
+                                    (tr.range.start as i32 + shift).unsigned_abs() as usize;
                             }
 
                             if tr.range.end > range.primary.index {
-                                tr.range.end = (tr.range.end as i32 + shift).unsigned_abs() as usize;
+                                tr.range.end =
+                                    (tr.range.end as i32 + shift).unsigned_abs() as usize;
                             }
                         }
                     }
@@ -639,10 +636,21 @@ impl eframe::App for BuffMonster {
 }
 
 fn main() -> eframe::Result<()> {
+    let icon_rgba = image::load_from_memory(include_bytes!("../icon.png"))
+        .expect("Failed to load icon")
+        .to_rgba8();
+    let (width, height) = icon_rgba.dimensions();
+    let icon_data = egui::IconData {
+        rgba: icon_rgba.into_raw(),
+        width,
+        height,
+    };
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
-            .with_title("BuffMonster"),
+            .with_title("Taskmonger")
+            .with_icon(icon_data),
         ..Default::default()
     };
 
@@ -650,12 +658,12 @@ fn main() -> eframe::Result<()> {
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
     eframe::run_native(
-        "BuffMonster",
+        "Taskmonger",
         native_options,
         Box::new(|cc| {
             cc.egui_ctx.set_fonts(fonts);
 
-            Ok(Box::new(BuffMonster::new(cc)))
+            Ok(Box::new(Taskmonger::new(cc)))
         }),
     )
 }
