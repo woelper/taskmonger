@@ -14,6 +14,11 @@ Open it up, start typing. That's it. Everything lives in one single text area. Y
 
 **Flexible by nature.** Because tags are just colored ranges on free-form text, you can use Taskmonger however you want. Strict GTD system? Sure. Chaotic brain dump? Also great. Priority lists, project notes, daily journals, grocery lists... it all works because there's no rigid structure fighting you.
 
+![alt text](res/screen01.png "Title")
+![alt text](res/screen02.png "Title")
+
+
+
 ## Features
 
 - **Inline tagging** - Select text, click a tag, done. Tagged ranges are highlighted directly in the buffer with the tag's color. Overlapping tags blend their colors together.
