@@ -655,6 +655,21 @@ fn main() -> eframe::Result<()> {
     };
 
     let mut fonts = egui::FontDefinitions::default();
+
+    fonts.font_data.insert(
+        "IBMPlexSans".to_owned(),
+        egui::FontData::from_static(include_bytes!("../fonts/IBMPlexSans-Regular.ttf")).into(),
+    );
+    fonts.font_data.insert(
+        "IBMPlexMono".to_owned(),
+        egui::FontData::from_static(include_bytes!("../fonts/IBMPlexMono-Regular.ttf")).into(),
+    );
+
+    fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap()
+        .insert(0, "IBMPlexSans".to_owned());
+    fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap()
+        .insert(0, "IBMPlexMono".to_owned());
+
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
     eframe::run_native(
