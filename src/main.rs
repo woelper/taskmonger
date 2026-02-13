@@ -3,7 +3,7 @@ use egui::containers::menu::MenuConfig;
 use egui::{color_picker, Button, Color32, Key, Layout, RichText};
 use egui_dnd::dnd;
 use egui_phosphor::regular::*;
-use log::debug;
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -568,12 +568,22 @@ impl eframe::App for Taskmonger {
                         debug!("shift {:?}", shift);
 
                         for tr in &mut self.tagged_ranges {
+                            debug!(
+                                "Tagged range: {:?}, shift: {shift}, cursor: {}",
+                                tr, range.primary.index
+                            );
                             if tr.range.start > range.primary.index {
                                 tr.range.start =
                                     (tr.range.start as i32 + shift).unsigned_abs() as usize;
                             }
 
                             if tr.range.end > range.primary.index {
+                                tr.range.end =
+                                    (tr.range.end as i32 + shift).unsigned_abs() as usize;
+                            }
+                            // when at the end of a range, extend it. This is convenient when extending to an existing paragraph
+                            if tr.range.end == range.primary.index - 1 && shift > 0 {
+                                info!("Shift 1");
                                 tr.range.end =
                                     (tr.range.end as i32 + shift).unsigned_abs() as usize;
                             }
