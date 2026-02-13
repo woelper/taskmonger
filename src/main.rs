@@ -1,3 +1,4 @@
+use log::debug;
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
 use egui::{color_picker, Button, Color32, Key, Layout, RichText};
@@ -132,7 +133,7 @@ impl Taskmonger {
         let json = serde_json::to_string_pretty(self)?;
         fs::write("backup.txt", &self.buffer)?;
         fs::write(Self::save_path(), json)?;
-        println!("Saved state to {}", Self::save_path().display());
+        debug!("Saved state to {}", Self::save_path().display());
         Ok(())
     }
 
@@ -141,7 +142,7 @@ impl Taskmonger {
         if path.exists() {
             let json = fs::read_to_string(&path)?;
             let mut app: Self = serde_json::from_str(&json)?;
-            println!("Loaded state from {}", path.display());
+            debug!("Loaded state from {}", path.display());
             // Clean up any invalid ranges that might have been saved
             app.clean_invalid_ranges();
             Ok(app)
@@ -153,14 +154,14 @@ impl Taskmonger {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         // Try to load from disk, fallback to default
         Self::load_from_disk().unwrap_or_else(|e| {
-            eprintln!("No saved state found ({}), starting fresh", e);
+            debug!("No saved state found ({}), starting fresh", e);
             let mut def = Self::default();
             if PathBuf::from("backup.txt").exists() {
                 let mut buf: String = Default::default();
                 if let Ok(mut f) = File::open(PathBuf::from("backup.txt")) {
                     _ = f.read_to_string(&mut buf);
                     if !buf.is_empty() {
-                        eprintln!("Recovered backup");
+                        debug!("Recovered backup");
                         def.buffer = buf;
                     }
                 }
@@ -581,21 +582,21 @@ impl eframe::App for Taskmonger {
                 self.selection = cursor_range.as_sorted_char_range();
             }
             if output.response.changed() {
-                println!("len {selection_len}");
+                debug!("len {selection_len}");
                 let mut shift: i32 = 0;
 
                 if let Some(range) = output.cursor_range {
-                    println!("Cursor range {:?}", range);
+                    debug!("Cursor range {:?}", range);
 
                     let keys_down = ctx.input(|i| i.keys_down.clone());
                     let delete = keys_down.iter().nth(0) == Some(&Key::Backspace);
 
                     if !keys_down.is_empty() {
-                        println!("key down {:?}", keys_down);
+                        debug!("key down {:?}", keys_down);
 
                         // No selection
                         if selection_len == 0 {
-                            println!("Single range Cursor");
+                            debug!("Single range Cursor");
                             if delete {
                                 shift -= 1;
                             } else {
@@ -603,7 +604,7 @@ impl eframe::App for Taskmonger {
                             }
                         } else {
                             // let selection_len = range.as_sorted_char_range().len() as i32;
-                            println!("Cursor range {:?}, len {selection_len}", range);
+                            debug!("Cursor range {:?}, len {selection_len}", range);
                             if delete {
                                 shift -= selection_len;
                             } else {
@@ -611,7 +612,7 @@ impl eframe::App for Taskmonger {
                             }
                         }
 
-                        println!("shift {:?}", shift);
+                        debug!("shift {:?}", shift);
 
                         for tr in &mut self.tagged_ranges {
                             if tr.range.start > range.primary.index {
@@ -636,6 +637,8 @@ impl eframe::App for Taskmonger {
 }
 
 fn main() -> eframe::Result<()> {
+    env_logger::init();
+
     let icon_rgba = image::load_from_memory(include_bytes!("../icon.png"))
         .expect("Failed to load icon")
         .to_rgba8();

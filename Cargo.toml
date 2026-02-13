@@ -17,3 +17,5 @@ rangetools = "0.1.4"
 colorous = "1.0.16"
 chrono = { version = "0.4.43", features = ["serde"] }
 image = "0.25.9"
+log = "0.4.29"
+env_logger = "0.11.9"
