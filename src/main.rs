@@ -1,11 +1,8 @@
-use chrono;
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
 use egui::{color_picker, Button, Color32, Key, Layout, RichText};
 use egui_dnd::dnd;
 use egui_phosphor::regular::*;
-use palette::{Hsl, IntoColor, Srgb};
-use rand::{random, Rng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -182,11 +179,10 @@ impl BuffMonster {
         let selection = self.selection.clone();
 
         for tr in self.tagged_ranges.iter_mut() {
-            if tr.tag_name == tag_name {
-                if tr.range.intersects(&selection) {
+            if tr.tag_name == tag_name
+                && tr.range.intersects(&selection) {
                     tr.range = tr.range.union(&selection);
                     return;
-                }
             }
         }
 
@@ -304,7 +300,6 @@ impl eframe::App for BuffMonster {
                     });
                 }
 
-                let tag_len = self.tags.len();
 
                 egui::ScrollArea::vertical()
                     .id_salt("tags")
@@ -316,7 +311,7 @@ impl eframe::App for BuffMonster {
                                 let color = to_color32(c);
                                 let button = ui.add(
                                     egui::Button::new(
-                                        egui::RichText::new(format!("{}", tag))
+                                        egui::RichText::new(tag.to_string())
                                             .color(color.readable_text_color()),
                                     )
                                     .fill(color),
@@ -471,7 +466,7 @@ impl eframe::App for BuffMonster {
                                     let cache = self
                                         .markdown_cache
                                         .entry(cache_key)
-                                        .or_insert_with(egui_commonmark::CommonMarkCache::default);
+                                        .or_default();
 
                                     // Render markdown
                                     egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
@@ -530,23 +525,19 @@ impl eframe::App for BuffMonster {
                                     if selected {
                                         ui.visuals().selection.stroke.color
                                     } else {
-                                        default_color.clone()
+                                        default_color
                                     }
+                                } else if selected {
+                                    ui.visuals().selection.stroke.color
                                 } else {
-                                    if selected {
-                                        ui.visuals().selection.stroke.color
-                                    } else {
-                                        col.clone()
-                                    }
+                                    *col
                                 },
                                 background: if selected {
                                     selected_color
+                                } else if background {
+                                    *col
                                 } else {
-                                    if background {
-                                        col.clone()
-                                    } else {
-                                        Color32::from_white_alpha(0)
-                                    }
+                                    Color32::from_white_alpha(0)
                                 },
                                 ..Default::default()
                             },
@@ -561,7 +552,7 @@ impl eframe::App for BuffMonster {
                                 color: if selected {
                                     ui.visuals().selection.stroke.color
                                 } else {
-                                    default_color.clone()
+                                    default_color
                                 },
                                 background: if selected {
                                     selected_color
@@ -629,11 +620,11 @@ impl eframe::App for BuffMonster {
 
                         for tr in &mut self.tagged_ranges {
                             if tr.range.start > range.primary.index {
-                                tr.range.start = (tr.range.start as i32 + shift).abs() as usize;
+                                tr.range.start = (tr.range.start as i32 + shift).unsigned_abs() as usize;
                             }
 
                             if tr.range.end > range.primary.index {
-                                tr.range.end = (tr.range.end as i32 + shift).abs() as usize;
+                                tr.range.end = (tr.range.end as i32 + shift).unsigned_abs() as usize;
                             }
                         }
                     }
