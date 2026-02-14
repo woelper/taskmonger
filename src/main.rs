@@ -1,3 +1,5 @@
+use crate::tools::{mix_colors, RangeExt, ReadableText};
+use crate::tools::{random_color, to_color32};
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
 use egui::{color_picker, Button, Color32, Key, Layout, RichText};
@@ -10,11 +12,6 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::ops::Range;
 use std::path::PathBuf;
-
-use crate::tools::{mix_colors, RangeExt, ReadableText};
-
-use crate::tools::{random_color, to_color32};
-
 mod tools;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
@@ -23,6 +20,8 @@ struct TaggedRange {
     range: Range<usize>,
     #[serde(default)]
     created: chrono::NaiveDateTime,
+    #[serde(default)]
+    modified: chrono::NaiveDateTime,
 }
 
 impl TaggedRange {
@@ -31,7 +30,11 @@ impl TaggedRange {
             tag_name,
             range,
             created: chrono::Utc::now().naive_local(),
+            modified: chrono::Utc::now().naive_local(),
         }
+    }
+    fn mark(&mut self) {
+        self.modified = chrono::Utc::now().naive_local();
     }
 }
 
@@ -572,20 +575,40 @@ impl eframe::App for Taskmonger {
                                 "Tagged range: {:?}, shift: {shift}, cursor: {}",
                                 tr, range.primary.index
                             );
+                            let mut modified = false;
                             if tr.range.start > range.primary.index {
                                 tr.range.start =
                                     (tr.range.start as i32 + shift).unsigned_abs() as usize;
+                                modified = true;
                             }
 
                             if tr.range.end > range.primary.index {
                                 tr.range.end =
                                     (tr.range.end as i32 + shift).unsigned_abs() as usize;
+                                modified = true;
                             }
                             // when at the end of a range, extend it. This is convenient when extending to an existing paragraph
                             if tr.range.end == range.primary.index - 1 && shift > 0 {
-                                info!("Shift 1");
-                                tr.range.end =
-                                    (tr.range.end as i32 + shift).unsigned_abs() as usize;
+                                let last = self
+                                    .buffer
+                                    .chars()
+                                    .nth(range.primary.index.saturating_sub(1));
+
+                                let before_last = self
+                                    .buffer
+                                    .chars()
+                                    .nth(range.primary.index.saturating_sub(2));
+
+                                info!("Shift 1, {:?} {:?}", before_last, last);
+                                if !(last == Some('\n') && before_last == Some('\n')) {
+                                    tr.range.end =
+                                        (tr.range.end as i32 + shift).unsigned_abs() as usize;
+                                    modified = true;
+                                }
+                                // TODO: if last two chars before cursor are newlines, donot do the next shift
+                            }
+                            if modified {
+                                tr.mark();
                             }
                         }
                     }
