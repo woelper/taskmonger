@@ -21,7 +21,14 @@ impl RangeExt for Range<usize> {
 }
 
 pub fn random_color(num_existing: usize) -> [u8; 3] {
-    let c = colorous::WARM.eval_rational(num_existing, 40);
+    let c = colorous::WARM.eval_rational(num_existing, 20);
+    [c.r, c.g, c.b]
+}
+
+
+pub fn random_color_of(num: usize, total: usize) -> [u8; 3] {
+    let c = colorous::RAINBOW.eval_rational(num, total);
+    // let c = colorous::WARM.eval_rational(num, total);
     [c.r, c.g, c.b]
 }
 

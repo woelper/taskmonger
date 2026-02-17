@@ -1,4 +1,4 @@
-use crate::tools::{mix_colors, RangeExt, ReadableText};
+use crate::tools::{RangeExt, ReadableText, mix_colors, random_color_of};
 use crate::tools::{random_color, to_color32};
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
@@ -13,6 +13,7 @@ use std::io::Read;
 use std::ops::Range;
 use std::path::PathBuf;
 mod tools;
+use egui::containers::menu::SubMenuButton;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct TaggedRange {
@@ -214,6 +215,18 @@ impl eframe::App for Taskmonger {
                                 !self.settings.markdown_view_enabled;
                             let _ = self.save_to_disk();
                         }
+
+                        let button = ui.add(egui::Button::new(GEAR));
+
+                        let p = egui::Popup::from_toggle_button_response(&button);
+                        p.show(|ui| {
+                            ui.vertical_centered_justified(|ui| if ui.button("Assign palette colors").clicked() {
+                                let num_tags = self.tags.len();
+                                for (i, t) in self.tags.iter_mut().enumerate() {
+                                    *t.1 = random_color_of(i, num_tags);
+                                }
+                            });
+                        });
                     });
                 });
                 ui.separator();
@@ -275,52 +288,53 @@ impl eframe::App for Taskmonger {
                                 p.show(|ui| {
                                     let mut srgba = Color32::from_rgb(c[0], c[1], c[2]);
 
-                                    if !self.selection.is_empty() {
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    RichText::new("Assign to selection")
-                                                        .color(srgba.readable_text_color()),
+                                    ui.vertical_centered_justified(|ui| {
+                                        if !self.selection.is_empty() {
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        RichText::new("Assign to selection")
+                                                            .color(srgba.readable_text_color()),
+                                                    )
+                                                    .fill(srgba),
                                                 )
-                                                .fill(srgba),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.apply_tag_to_selection(&tag);
-                                        }
-                                    } else {
-                                        ui.label("Select something to assign this tag.");
-                                    }
-                                    let button = Button::new(format!("Color {ARROW_RIGHT}"))
-                                        .fill(srgba.gamma_multiply(0.3));
-                                    use egui::containers::menu::SubMenuButton;
-                                    SubMenuButton::from_button(button)
-                                        .config(MenuConfig::new().close_behavior(
-                                            egui::PopupCloseBehavior::CloseOnClickOutside,
-                                        ))
-                                        .ui(ui, |ui| {
-                                            ui.spacing_mut().slider_width = 200.0;
-                                            if color_picker::color_picker_color32(
-                                                ui,
-                                                &mut srgba,
-                                                color_picker::Alpha::Opaque,
-                                            ) {
-                                                if let Some(t) = self.tags.get_mut(&tag) {
-                                                    t[0] = srgba.r();
-                                                    t[1] = srgba.g();
-                                                    t[2] = srgba.b();
-                                                }
+                                                .clicked()
+                                            {
+                                                self.apply_tag_to_selection(&tag);
                                             }
-                                        });
-                                    if ui.button("Rand col").clicked() {
-                                        if let Some(t) = self.tags.get_mut(&tag) {
-                                            *t = random_color(rand::random_range(0..40) as usize);
+                                        } else {
+                                            ui.label("Select something to assign this tag.");
                                         }
-                                    }
+                                        let button = Button::new(format!("Color {ARROW_RIGHT}"))
+                                            .fill(srgba.gamma_multiply(0.3));
+                                        SubMenuButton::from_button(button)
+                                            .config(MenuConfig::new().close_behavior(
+                                                egui::PopupCloseBehavior::CloseOnClickOutside,
+                                            ))
+                                            .ui(ui, |ui| {
+                                                ui.spacing_mut().slider_width = 200.0;
+                                                if color_picker::color_picker_color32(
+                                                    ui,
+                                                    &mut srgba,
+                                                    color_picker::Alpha::Opaque,
+                                                ) {
+                                                    if let Some(t) = self.tags.get_mut(&tag) {
+                                                        *t = [srgba.r(), srgba.g(), srgba.b()];
+                                                    }
+                                                }
+                                            });
+                                        if ui.button("Rand col").clicked() {
+                                            if let Some(t) = self.tags.get_mut(&tag) {
+                                                *t = random_color(
+                                                    rand::random_range(0..40) as usize
+                                                );
+                                            }
+                                        }
 
-                                    if ui.button(TRASH).clicked() {
-                                        self.delete_tag(&tag);
-                                    }
+                                        if ui.button(TRASH).clicked() {
+                                            self.delete_tag(&tag);
+                                        }
+                                    });
                                 });
                             }
                         });
