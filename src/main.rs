@@ -218,11 +218,6 @@ impl eframe::App for Taskmonger {
                 });
                 ui.separator();
 
-                // Tag adding
-                if ui.button("Add tag").clicked() {
-                    ctx.memory_mut(|w| w.data.insert_temp("tag".into(), "".to_string()));
-                }
-
                 let tag = ctx.memory(|r| r.data.get_temp::<String>("tag".into()));
 
                 if let Some(tag) = tag {
@@ -230,24 +225,28 @@ impl eframe::App for Taskmonger {
                         ui.set_width(200.0);
                         ui.heading("Add tag");
                         let mut tag_name = tag.clone();
-                        let text_edit = ui.text_edit_singleline(&mut tag_name);
 
-                        if text_edit.changed() {
-                            ctx.memory_mut(|w| w.data.insert_temp("tag".into(), tag_name.clone()));
-                        }
-                        ui.memory_mut(|w| w.request_focus(text_edit.id));
+                        ui.vertical_centered_justified(|ui| {
+                            let text_edit = ui.text_edit_singleline(&mut tag_name);
+                            if text_edit.changed() {
+                                ctx.memory_mut(|w| {
+                                    w.data.insert_temp("tag".into(), tag_name.clone())
+                                });
+                            }
+                            ui.memory_mut(|w| w.request_focus(text_edit.id));
+                        });
 
                         ui.horizontal(|ui| {
-                            if ui.button("Cancel").clicked() {
+                            if ui.button("Close").clicked() {
                                 ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
                             }
 
                             if ui.button("Add").clicked() {
                                 self.add_tag(tag_name.clone());
-                                ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
+                                // ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
                             }
 
-                            if ui.button("Add and assign").clicked() {
+                            if ui.button("Assign & close").clicked() {
                                 self.apply_tag_to_selection(&tag);
                                 self.add_tag(tag_name);
                                 ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
@@ -326,6 +325,13 @@ impl eframe::App for Taskmonger {
                             }
                         });
                     });
+
+                // Tag adding
+                ui.vertical_centered_justified(|ui| {
+                    if ui.button("Add tag").clicked() {
+                        ctx.memory_mut(|w| w.data.insert_temp("tag".into(), "".to_string()));
+                    }
+                });
 
                 ui.separator();
                 ui.label("Tagged ranges:");
