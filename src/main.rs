@@ -492,11 +492,11 @@ impl eframe::App for Taskmonger {
                 layout_job.wrap.max_width = wrap_width;
 
                 let default_color = ui.style().visuals.text_color();
-                let font_id = egui::FontId::monospace(14.0);
+                let font_id = egui::FontId::monospace(15.0);
 
                 // TODO: if it is faster, collapse ranges so we need fewer layoutjobs
                 // TODO: expose this as setting later
-                let background = self.settings.mark_as_background;
+                let background_is_colored = self.settings.mark_as_background;
 
                 for (i, c) in text.chars().enumerate() {
                     let selected = self.selection.contains(&i);
@@ -508,11 +508,11 @@ impl eframe::App for Taskmonger {
                             0.0,
                             egui::TextFormat {
                                 font_id: font_id.clone(),
-                                color: if background {
+                                color: if background_is_colored {
                                     if selected {
                                         ui.visuals().selection.stroke.color
                                     } else {
-                                        default_color
+                                        col.readable_text_color()
                                     }
                                 } else if selected {
                                     ui.visuals().selection.stroke.color
@@ -521,7 +521,7 @@ impl eframe::App for Taskmonger {
                                 },
                                 background: if selected {
                                     selected_color
-                                } else if background {
+                                } else if background_is_colored {
                                     *col
                                 } else {
                                     Color32::from_white_alpha(0)
@@ -571,21 +571,108 @@ impl eframe::App for Taskmonger {
                 .inner;
 
             let tags_clone = self.tags.clone();
+            let tagged_ranges_clone = self.tagged_ranges.clone();
+            let selection = self.selection.clone();
             let context_menu_open = output.response.context_menu(|ui| {
-                for (tag, c) in &tags_clone {
-                    let color = to_color32(*c);
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                egui::RichText::new(tag).color(color.readable_text_color()),
+                // Assign tag to selection
+                if !selection.is_empty() {
+                    for (tag, c) in &tags_clone {
+                        let color = to_color32(*c);
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new(tag).color(color.readable_text_color()),
+                                )
+                                .fill(color),
                             )
-                            .fill(color),
-                        )
-                        .clicked()
-                    {
-                        self.apply_tag_to_selection(tag);
-                        ui.close();
+                            .clicked()
+                        {
+                            self.apply_tag_to_selection(tag);
+                            ui.close();
+                        }
                     }
+                    ui.separator();
+                }
+
+                // Clear tags from selection
+                if !selection.is_empty() {
+                    let overlapping: Vec<_> = tagged_ranges_clone
+                        .iter()
+                        .filter(|tr| tr.range.intersects(&selection))
+                        .collect();
+                    if !overlapping.is_empty() {
+                        if ui.button(format!("{ERASER} Clear tags from selection")).clicked() {
+                            let sel = selection.clone();
+                            self.tagged_ranges = self
+                                .tagged_ranges
+                                .drain(..)
+                                .flat_map(|tr| {
+                                    if !tr.range.intersects(&sel) {
+                                        return vec![tr];
+                                    }
+                                    let mut result = Vec::new();
+                                    // Part before selection
+                                    if tr.range.start < sel.start {
+                                        result.push(TaggedRange {
+                                            range: tr.range.start..sel.start,
+                                            ..tr.clone()
+                                        });
+                                    }
+                                    // Part after selection
+                                    if tr.range.end > sel.end {
+                                        result.push(TaggedRange {
+                                            range: sel.end..tr.range.end,
+                                            ..tr
+                                        });
+                                    }
+                                    result
+                                })
+                                .collect();
+                            let _ = self.save_to_disk();
+                            ui.close();
+                        }
+                        ui.separator();
+                    }
+                }
+
+                // Tagged ranges containing cursor
+                let cursor_pos = selection.start;
+                let ranges_at_cursor: Vec<_> = tagged_ranges_clone
+                    .iter()
+                    .filter(|tr| tr.range.contains(&cursor_pos))
+                    .collect();
+                if !ranges_at_cursor.is_empty() {
+                    SubMenuButton::new(format!("{TAG} Tags here ({})…", ranges_at_cursor.len()))
+                        .ui(ui, |ui| {
+                            for tr in &ranges_at_cursor {
+                                let preview: String = self
+                                    .buffer
+                                    .chars()
+                                    .skip(tr.range.start)
+                                    .take(tr.range.end - tr.range.start)
+                                    .take_while(|c| c != &'\n')
+                                    .take(30)
+                                    .collect();
+                                ui.horizontal(|ui| {
+                                    if let Some(col) = tags_clone.get(&tr.tag_name) {
+                                        let color = to_color32(*col);
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "{}: {}",
+                                                tr.tag_name, preview
+                                            ))
+                                            .color(color),
+                                        );
+                                    } else {
+                                        ui.label(format!("{}: {}", tr.tag_name, preview));
+                                    }
+                                    if ui.small_button(TRASH).clicked() {
+                                        self.delete_tagged_range(tr);
+                                        ui.close();
+                                    }
+                                });
+                            }
+                        });
                 }
             });
 
@@ -655,7 +742,7 @@ impl eframe::App for Taskmonger {
                                 modified = true;
                             }
                             // when at the end of a range, extend it. This is convenient when extending to an existing paragraph
-                            if tr.range.end == range.primary.index - 1 && shift > 0 {
+                            if tr.range.end == range.primary.index.saturating_sub(1) && shift > 0 {
                                 let last = self
                                     .buffer
                                     .chars()
