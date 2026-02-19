@@ -1,4 +1,4 @@
-use crate::tools::{RangeExt, ReadableText, mix_colors, random_color_of};
+use crate::tools::{mix_colors, random_color_of, RangeExt, ReadableText};
 use crate::tools::{random_color, to_color32};
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
@@ -14,6 +14,12 @@ use std::ops::Range;
 use std::path::PathBuf;
 mod tools;
 use egui::containers::menu::SubMenuButton;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash, Default)]
+struct Filter {
+    text: String,
+    active: bool,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
 struct TaggedRange {
@@ -60,6 +66,8 @@ struct Taskmonger {
     selection: Range<usize>,
     #[serde(skip)]
     markdown_cache: HashMap<String, egui_commonmark::CommonMarkCache>,
+    #[serde(default)]
+    filter: Filter,
 }
 
 impl Default for Taskmonger {
@@ -75,6 +83,7 @@ impl Default for Taskmonger {
             settings: Default::default(),
             selection: Default::default(),
             markdown_cache: HashMap::new(),
+            filter: Filter::default(),
         }
     }
 }
@@ -217,16 +226,23 @@ impl eframe::App for Taskmonger {
                         }
 
                         let button = ui.add(egui::Button::new(GEAR));
-
                         let p = egui::Popup::from_toggle_button_response(&button);
                         p.show(|ui| {
-                            ui.vertical_centered_justified(|ui| if ui.button("Assign palette colors").clicked() {
-                                let num_tags = self.tags.len();
-                                for (i, t) in self.tags.iter_mut().enumerate() {
-                                    *t.1 = random_color_of(i, num_tags);
+                            ui.vertical_centered_justified(|ui| {
+                                if ui.button("Assign palette colors").clicked() {
+                                    let num_tags = self.tags.len();
+                                    for (i, t) in self.tags.iter_mut().enumerate() {
+                                        *t.1 = random_color_of(i, num_tags);
+                                    }
                                 }
+                                ui.checkbox(
+                                    &mut self.settings.mark_as_background,
+                                    "Mark text background",
+                                );
                             });
                         });
+
+                        if ui.text_edit_singleline(&mut self.filter.text).changed() {}
                     });
                 });
                 ui.separator();
@@ -256,7 +272,6 @@ impl eframe::App for Taskmonger {
 
                             if ui.button("Add").clicked() {
                                 self.add_tag(tag_name.clone());
-                                // ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
                             }
 
                             if ui.button("Assign & close").clicked() {
@@ -540,6 +555,9 @@ impl eframe::App for Taskmonger {
                 ui.fonts_mut(|f| f.layout_job(layout_job))
             };
 
+            // Save selection before TextEdit processes input (right-click clears it)
+            let saved_selection = self.selection.clone();
+
             let output = egui::ScrollArea::vertical()
                 .show(ui, |ui| {
                     egui::TextEdit::multiline(&mut self.buffer)
@@ -552,9 +570,38 @@ impl eframe::App for Taskmonger {
                 })
                 .inner;
 
+            let tags_clone = self.tags.clone();
+            let context_menu_open = output.response.context_menu(|ui| {
+                for (tag, c) in &tags_clone {
+                    let color = to_color32(*c);
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(tag).color(color.readable_text_color()),
+                            )
+                            .fill(color),
+                        )
+                        .clicked()
+                    {
+                        self.apply_tag_to_selection(tag);
+                        ui.close();
+                    }
+                }
+            });
+
             let selection_len = self.selection.len() as i32;
 
-            if let Some(cursor_range) = output.state.cursor.char_range() {
+            // Detect right-click via raw input events.
+            // secondary_down() catches the PRESS frame (when TextEdit clears cursor),
+            // secondary_clicked() catches the RELEASE frame,
+            // context_menu_open catches all frames while the menu is visible.
+            let secondary_active = ctx.input(|i| {
+                i.pointer.secondary_down() || i.pointer.secondary_clicked()
+            });
+
+            if (context_menu_open.is_some() || secondary_active) && !saved_selection.is_empty() {
+                self.selection = saved_selection;
+            } else if let Some(cursor_range) = output.state.cursor.char_range() {
                 self.selection = cursor_range.as_sorted_char_range();
             }
             if output.response.changed() {
