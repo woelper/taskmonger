@@ -700,6 +700,7 @@ impl eframe::App for Taskmonger {
 
                     let keys_down = ctx.input(|i| i.keys_down.clone());
                     let delete = keys_down.iter().nth(0) == Some(&Key::Backspace);
+                    let enter = keys_down.contains(&Key::Enter);
 
                     if !keys_down.is_empty() {
                         debug!("key down {:?}", keys_down);
@@ -719,6 +720,48 @@ impl eframe::App for Taskmonger {
                                 shift -= selection_len;
                             } else {
                                 shift -= selection_len - 1;
+                            }
+                        }
+
+                        // Markdown list continuation: on Enter, continue list prefix
+                        if enter && !delete && selection_len == 0 {
+                            let cursor_char_pos = range.primary.index;
+                            let cursor_byte_pos = self
+                                .buffer
+                                .char_indices()
+                                .nth(cursor_char_pos)
+                                .map(|(i, _)| i)
+                                .unwrap_or(self.buffer.len());
+
+                            if cursor_byte_pos > 0
+                                && self.buffer.as_bytes()[cursor_byte_pos - 1] == b'\n'
+                            {
+                                let before_newline = cursor_byte_pos - 1;
+                                let line_start = self.buffer[..before_newline]
+                                    .rfind('\n')
+                                    .map(|i| i + 1)
+                                    .unwrap_or(0);
+                                let previous_line =
+                                    self.buffer[line_start..before_newline].to_string();
+
+                                if let Some(prefix) =
+                                    tools::extract_list_prefix(&previous_line)
+                                {
+                                    let prefix_char_len = prefix.chars().count() as i32;
+                                    self.buffer.insert_str(cursor_byte_pos, &prefix);
+                                    shift += prefix_char_len;
+
+                                    // Move cursor to end of inserted prefix
+                                    let new_cursor_pos =
+                                        cursor_char_pos + prefix_char_len as usize;
+                                    let mut state = output.state.clone();
+                                    state.cursor.set_char_range(Some(
+                                        egui::text::CCursorRange::one(
+                                            egui::text::CCursor::new(new_cursor_pos),
+                                        ),
+                                    ));
+                                    state.store(ctx, output.response.id);
+                                }
                             }
                         }
 

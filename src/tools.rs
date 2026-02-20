@@ -53,6 +53,43 @@ impl ReadableText for Color32 {
     }
 }
 
+/// Extracts a markdown list prefix from a line and returns the continuation prefix for the next line.
+/// Handles: `- `, `* `, `+ `, `- [ ] `, `- [x] `, `1. `, etc. Preserves indentation.
+pub fn extract_list_prefix(line: &str) -> Option<String> {
+    let indent_len = line.len() - line.trim_start().len();
+    let indent = &line[..indent_len];
+    let trimmed = &line[indent_len..];
+
+    // Checkbox patterns (most specific, check first)
+    for marker in ["-", "*", "+"] {
+        for checkbox in ["[ ] ", "[x] ", "[X] "] {
+            let pattern = format!("{} {}", marker, checkbox);
+            if trimmed.starts_with(&pattern) {
+                // Always continue with unchecked checkbox
+                return Some(format!("{}{} [ ] ", indent, marker));
+            }
+        }
+    }
+
+    // Unordered list
+    for marker in ["-", "*", "+"] {
+        let pattern = format!("{} ", marker);
+        if trimmed.starts_with(&pattern) {
+            return Some(format!("{}{}", indent, pattern));
+        }
+    }
+
+    // Ordered list (e.g., "1. ", "42. ")
+    let digit_end = trimmed.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+    if digit_end > 0 && trimmed[digit_end..].starts_with(". ") {
+        if let Ok(num) = trimmed[..digit_end].parse::<usize>() {
+            return Some(format!("{}{}. ", indent, num + 1));
+        }
+    }
+
+    None
+}
+
 pub fn mix_colors(c1: Color32, c2: Color32) -> Color32 {
     Color32::from_rgb(
         ((c1.r() as u16 + c2.r() as u16) / 2) as u8,
