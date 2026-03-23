@@ -29,6 +29,10 @@ struct TaggedRange {
     created: chrono::NaiveDateTime,
     #[serde(default)]
     modified: chrono::NaiveDateTime,
+    #[serde(default)]
+    hide: bool,
+    #[serde(default)]
+    relates_to: Vec<String>
 }
 
 impl TaggedRange {
@@ -38,6 +42,8 @@ impl TaggedRange {
             range,
             created: chrono::Utc::now().naive_local(),
             modified: chrono::Utc::now().naive_local(),
+            hide: Default::default(),
+            relates_to: Default::default()
         }
     }
     fn mark(&mut self) {
@@ -65,6 +71,8 @@ struct Taskmonger {
     #[serde(skip)]
     selection: Range<usize>,
     #[serde(skip)]
+    hovered_checkbox: Option<usize>,
+    #[serde(skip)]
     markdown_cache: HashMap<String, egui_commonmark::CommonMarkCache>,
     #[serde(default)]
     filter: Filter,
@@ -82,6 +90,7 @@ impl Default for Taskmonger {
             tagged_ranges: Vec::new(),
             settings: Default::default(),
             selection: Default::default(),
+            hovered_checkbox: None,
             markdown_cache: HashMap::new(),
             filter: Filter::default(),
         }
@@ -185,6 +194,13 @@ impl Taskmonger {
             }
             if tr.range.start > buffer_len {
                 tr.range.start = buffer_len;
+            }
+        }
+
+        // clean first newline
+        for tr in &mut self.tagged_ranges {
+            if self.buffer.chars().nth(tr.range.start) == Some('\n') {
+                tr.range.start = tr.range.start.saturating_add(1);
             }
         }
     }
@@ -370,7 +386,7 @@ impl eframe::App for Taskmonger {
 
                     dnd(ui, "drag_drop").show_vec(
                         &mut self.tagged_ranges,
-                        |ui, item, handle, state| {
+                        |ui, current_range, handle, state| {
                             ui.horizontal(|ui| {
                                 handle.ui(ui, |ui| {
                                     if state.dragged {
@@ -383,23 +399,23 @@ impl eframe::App for Taskmonger {
                                 let preview: String = self
                                     .buffer
                                     .chars()
-                                    .skip(item.range.start)
-                                    .take(item.range.end - item.range.start)
+                                    .skip(current_range.range.start)
+                                    .take(current_range.range.end - current_range.range.start)
                                     .take_while(|c| c != &'\n')
                                     .take(30)
                                     .collect();
 
-                                if let Some(col) = &self.tags.get(&item.tag_name) {
+                                if let Some(col) = &self.tags.get(&current_range.tag_name) {
                                     let color = to_color32(**col);
                                     ui.label(
                                         egui::RichText::new(format!(
                                             "{}: {}",
-                                            item.tag_name, preview
+                                            current_range.tag_name, preview
                                         ))
                                         .color(color),
                                     );
                                 } else {
-                                    ui.label(format!("{}: {}", item.tag_name, preview));
+                                    ui.label(format!("{}: {}", current_range.tag_name, preview));
                                 }
                                 ui.horizontal(|ui| {
                                     ui.with_layout(
@@ -407,7 +423,11 @@ impl eframe::App for Taskmonger {
                                         |ui| {
                                             // TODO: add button to scroll to this range
                                             if ui.small_button(TRASH).clicked() {
-                                                delete_tr = Some(item.clone());
+                                                delete_tr = Some(current_range.clone());
+                                            }
+                                            let icon = if current_range.hide {EYE_CLOSED} else {EYE};
+                                            if ui.small_button(icon).clicked() {
+                                                current_range.hide = !current_range.hide;
                                             }
                                         },
                                     );
@@ -445,9 +465,7 @@ impl eframe::App for Taskmonger {
                                     } else {
                                         ui.label(egui::RichText::new(&tr.tag_name).strong());
                                     }
-
                                     ui.separator();
-
                                     // Get or create cache for this tagged range
                                     let cache_key = format!(
                                         "{}:{}-{}",
@@ -499,12 +517,35 @@ impl eframe::App for Taskmonger {
                 let background_is_colored = self.settings.mark_as_background;
 
                 for (i, c) in text.chars().enumerate() {
+                    
+                    // TODO this is expensive
+                    let mut skip = false;
+                    for tr in &self.tagged_ranges {
+                        if tr.hide && tr.range.contains(&i) {
+                            skip = true;
+                        }
+                    }
+                    if skip { continue;}
+                    
                     let selected = self.selection.contains(&i);
                     let selected_color = ui.visuals().selection.bg_fill;
 
+                    // Show toggled checkbox character on hover
+                    let display_char = if self.hovered_checkbox == Some(i) {
+                        match c {
+                            ' ' => 'x',
+                            'x' | 'X' => ' ',
+                            other => other,
+                        }
+                    } else {
+                        c
+                    };
+
                     if let Some(col) = colormap.get(&i) {
+
+
                         layout_job.append(
-                            &c.to_string(),
+                            &display_char.to_string(),
                             0.0,
                             egui::TextFormat {
                                 font_id: font_id.clone(),
@@ -532,7 +573,7 @@ impl eframe::App for Taskmonger {
                     } else {
                         // default text
                         layout_job.append(
-                            &c.to_string(),
+                            &display_char.to_string(),
                             0.0,
                             egui::TextFormat {
                                 font_id: font_id.clone(),
@@ -560,6 +601,9 @@ impl eframe::App for Taskmonger {
 
             let output = egui::ScrollArea::vertical()
                 .show(ui, |ui| {
+                    // let filter =
+                    // let mut filtered_buffer = self.buffer.clone();
+
                     egui::TextEdit::multiline(&mut self.buffer)
                         .desired_width(f32::INFINITY)
                         .lock_focus(true)
@@ -569,6 +613,10 @@ impl eframe::App for Taskmonger {
                         .show(ui)
                 })
                 .inner;
+
+            // if output.response.changed() {
+            //     self.buffer.replace(fil, to)
+            // }
 
             let tags_clone = self.tags.clone();
             let tagged_ranges_clone = self.tagged_ranges.clone();
@@ -691,6 +739,42 @@ impl eframe::App for Taskmonger {
             } else if let Some(cursor_range) = output.state.cursor.char_range() {
                 self.selection = cursor_range.as_sorted_char_range();
             }
+            // Checkbox hover preview and click-to-toggle
+            let mut current_hover_checkbox: Option<usize> = None;
+            if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                if output.response.hovered() {
+                    let cursor =
+                        output
+                            .galley
+                            .cursor_from_pos(pos - output.galley_pos);
+                    let char_idx = cursor.index;
+
+                    if let Some((middle_idx, is_checked)) =
+                        tools::find_checkbox_at(&self.buffer, char_idx)
+                    {
+                        current_hover_checkbox = Some(middle_idx);
+                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+
+                        if ctx.input(|i| i.pointer.primary_clicked()) {
+                            // Toggle the checkbox character in-place
+                            let byte_idx = self
+                                .buffer
+                                .char_indices()
+                                .nth(middle_idx)
+                                .map(|(i, _)| i)
+                                .unwrap();
+                            let new_char = if is_checked { " " } else { "x" };
+                            self.buffer
+                                .replace_range(byte_idx..byte_idx + 1, new_char);
+                            // Clear hover to avoid one-frame double-toggle in layouter
+                            current_hover_checkbox = None;
+                            let _ = self.save_to_disk();
+                        }
+                    }
+                }
+            }
+            self.hovered_checkbox = current_hover_checkbox;
+
             if output.response.changed() {
                 debug!("len {selection_len}");
                 let mut shift: i32 = 0;

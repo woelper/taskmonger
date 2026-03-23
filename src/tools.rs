@@ -90,6 +90,35 @@ pub fn extract_list_prefix(line: &str) -> Option<String> {
     None
 }
 
+/// Given a char index in the buffer, checks if it's part of a checkbox pattern (`[ ]`, `[x]`, `[X]`).
+/// Returns `Some((middle_char_index, is_checked))` if found.
+pub fn find_checkbox_at(buffer: &str, char_idx: usize) -> Option<(usize, bool)> {
+    let chars: Vec<char> = buffer.chars().collect();
+    let len = chars.len();
+    if char_idx >= len {
+        return None;
+    }
+
+    // char_idx could be on the `[`, the middle char, or the `]`
+    for offset in 0..=2usize {
+        if char_idx < offset {
+            continue;
+        }
+        let start = char_idx - offset;
+        if start + 2 >= len {
+            continue;
+        }
+
+        if chars[start] == '[' && chars[start + 2] == ']' {
+            let middle = chars[start + 1];
+            if middle == ' ' || middle == 'x' || middle == 'X' {
+                return Some((start + 1, middle != ' '));
+            }
+        }
+    }
+    None
+}
+
 pub fn mix_colors(c1: Color32, c2: Color32) -> Color32 {
     Color32::from_rgb(
         ((c1.r() as u16 + c2.r() as u16) / 2) as u8,
