@@ -1,24 +1,4 @@
-use std::cmp::{max, min};
-use std::ops::Range;
-
 use egui::Color32;
-
-pub trait RangeExt {
-    fn intersects(&self, other: &Self) -> bool;
-    fn union(&self, other: &Self) -> Self;
-}
-
-impl RangeExt for Range<usize> {
-    // Check if ranges overlap
-    fn intersects(&self, other: &Self) -> bool {
-        self.start < other.end && other.start < self.end
-    }
-
-    // Returns the convex hull (the smallest range containing both)
-    fn union(&self, other: &Self) -> Self {
-        min(self.start, other.start)..max(self.end, other.end)
-    }
-}
 
 pub fn random_color(num_existing: usize) -> [u8; 3] {
     let c = colorous::WARM.eval_rational(num_existing, 20);

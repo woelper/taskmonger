@@ -1,16 +1,14 @@
-use crate::tools::{mix_colors, random_color_of, RangeExt, ReadableText};
-use crate::tools::{random_color, to_color32};
+use crate::tools::{mix_colors, random_color, random_color_of, to_color32, ReadableText};
 use eframe::egui;
 use egui::containers::menu::MenuConfig;
-use egui::{color_picker, Button, Color32, Key, Layout, RichText};
+use egui::{color_picker, Button, Color32, Key, Layout};
 use egui_dnd::dnd;
 use egui_phosphor::regular::*;
-use log::{debug, info};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Read;
-use std::ops::Range;
 use std::path::PathBuf;
 mod tools;
 use egui::containers::menu::SubMenuButton;
@@ -22,9 +20,9 @@ struct Filter {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, Hash)]
-struct TaggedRange {
-    tag_name: String,
-    range: Range<usize>,
+struct Task {
+    buffer: String,
+    tag_names: Vec<String>,
     #[serde(default)]
     created: chrono::NaiveDateTime,
     #[serde(default)]
@@ -32,22 +30,50 @@ struct TaggedRange {
     #[serde(default)]
     hide: bool,
     #[serde(default)]
-    relates_to: Vec<String>
+    completed: bool,
+    #[serde(default)]
+    relates_to: Vec<String>,
 }
 
-impl TaggedRange {
-    fn new(tag_name: String, range: Range<usize>) -> Self {
+impl Task {
+    fn new(buffer: String) -> Self {
         Self {
-            tag_name,
-            range,
+            buffer,
+            tag_names: Vec::new(),
             created: chrono::Utc::now().naive_local(),
             modified: chrono::Utc::now().naive_local(),
-            hide: Default::default(),
-            relates_to: Default::default()
+            hide: false,
+            completed: false,
+            relates_to: Vec::new(),
         }
     }
+
     fn mark(&mut self) {
         self.modified = chrono::Utc::now().naive_local();
+    }
+
+    /// Returns the mixed color for this task based on its tags
+    fn color(&self, tags: &HashMap<String, [u8; 3]>) -> Option<Color32> {
+        let mut result: Option<Color32> = None;
+        for tag_name in &self.tag_names {
+            if let Some(col) = tags.get(tag_name) {
+                let c = to_color32(*col);
+                result = Some(match result {
+                    Some(existing) => mix_colors(existing, c),
+                    None => c,
+                });
+            }
+        }
+        result
+    }
+
+    /// First line preview, truncated
+    fn preview(&self, max_chars: usize) -> String {
+        self.buffer
+            .chars()
+            .take_while(|c| c != &'\n')
+            .take(max_chars)
+            .collect()
     }
 }
 
@@ -62,16 +88,10 @@ struct Settings {
 
 #[derive(Serialize, Deserialize)]
 struct Taskmonger {
-    buffer: String,
+    tasks: Vec<Task>,
     #[serde(default)]
     tags: HashMap<String, [u8; 3]>,
-    #[serde(default)]
-    tagged_ranges: Vec<TaggedRange>,
     settings: Settings,
-    #[serde(skip)]
-    selection: Range<usize>,
-    #[serde(skip)]
-    hovered_checkbox: Option<usize>,
     #[serde(skip)]
     markdown_cache: HashMap<String, egui_commonmark::CommonMarkCache>,
     #[serde(default)]
@@ -81,16 +101,12 @@ struct Taskmonger {
 impl Default for Taskmonger {
     fn default() -> Self {
         Self {
-            buffer: format!(
+            tasks: vec![Task::new(format!(
                 "Welcome to {}! \n\nJust start typing here and tag your things.",
                 env!("CARGO_PKG_NAME")
-            )
-            .to_string(),
+            ))],
             tags: Default::default(),
-            tagged_ranges: Vec::new(),
             settings: Default::default(),
-            selection: Default::default(),
-            hovered_checkbox: None,
             markdown_cache: HashMap::new(),
             filter: Filter::default(),
         }
@@ -99,14 +115,19 @@ impl Default for Taskmonger {
 
 impl Taskmonger {
     fn save_path() -> PathBuf {
-        // Save in the current directory for simplicity
-        // Could use dirs crate for a proper config directory
         PathBuf::from("taskmonger_state.json")
     }
 
     fn save_to_disk(&self) -> Result<(), Box<dyn std::error::Error>> {
         let json = serde_json::to_string_pretty(self)?;
-        fs::write("backup.txt", &self.buffer)?;
+        // Backup all task buffers as plain text
+        let backup: String = self
+            .tasks
+            .iter()
+            .map(|t| t.buffer.as_str())
+            .collect::<Vec<_>>()
+            .join("\n---\n");
+        fs::write("backup.txt", &backup)?;
         fs::write(Self::save_path(), json)?;
         debug!("Saved state to {}", Self::save_path().display());
         Ok(())
@@ -116,10 +137,8 @@ impl Taskmonger {
         let path = Self::save_path();
         if path.exists() {
             let json = fs::read_to_string(&path)?;
-            let mut app: Self = serde_json::from_str(&json)?;
+            let app: Self = serde_json::from_str(&json)?;
             debug!("Loaded state from {}", path.display());
-            // Clean up any invalid ranges that might have been saved
-            app.clean_invalid_ranges();
             Ok(app)
         } else {
             Err("Save file does not exist".into())
@@ -127,7 +146,6 @@ impl Taskmonger {
     }
 
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        // Try to load from disk, fallback to default
         Self::load_from_disk().unwrap_or_else(|e| {
             debug!("No saved state found ({}), starting fresh", e);
             let mut def = Self::default();
@@ -137,7 +155,7 @@ impl Taskmonger {
                     _ = f.read_to_string(&mut buf);
                     if !buf.is_empty() {
                         debug!("Recovered backup");
-                        def.buffer = buf;
+                        def.tasks = vec![Task::new(buf)];
                     }
                 }
             }
@@ -151,64 +169,27 @@ impl Taskmonger {
         let _ = self.save_to_disk();
     }
 
-    fn apply_tag_to_selection(&mut self, tag_name: &str) {
-        let selection = self.selection.clone();
-
-        for tr in self.tagged_ranges.iter_mut() {
-            if tr.tag_name == tag_name && tr.range.intersects(&selection) {
-                tr.range = tr.range.union(&selection);
-                return;
-            }
-        }
-
-        // Just add the range
-        self.tagged_ranges
-            .push(TaggedRange::new(tag_name.to_string(), selection));
-
-        let _ = self.save_to_disk();
-    }
-
-    fn delete_tagged_range(&mut self, range: &TaggedRange) {
-        self.tagged_ranges.retain(|t| t != range);
-        let _ = self.save_to_disk();
-    }
-
     fn delete_tag(&mut self, tag_name: &str) {
         self.tags.remove(tag_name);
-        self.tagged_ranges.retain(|tr| tr.tag_name != tag_name);
+        // Remove this tag from all tasks
+        for task in &mut self.tasks {
+            task.tag_names.retain(|t| t != tag_name);
+        }
         let _ = self.save_to_disk();
     }
 
-    fn clean_invalid_ranges(&mut self) {
-        let buffer_len = self.buffer.len();
-        // Remove ranges that are completely out of bounds or invalid
-        self.tagged_ranges.retain(|tr| {
-            tr.range.start < buffer_len
-                && tr.range.end <= buffer_len
-                && tr.range.start < tr.range.end
-        });
-        // Clamp ranges that extend beyond the buffer
-        for tr in &mut self.tagged_ranges {
-            if tr.range.end > buffer_len {
-                tr.range.end = buffer_len;
-            }
-            if tr.range.start > buffer_len {
-                tr.range.start = buffer_len;
-            }
-        }
-
-        // clean first newline
-        for tr in &mut self.tagged_ranges {
-            if self.buffer.chars().nth(tr.range.start) == Some('\n') {
-                tr.range.start = tr.range.start.saturating_add(1);
-            }
+    /// Ensure there's always at least one task
+    fn ensure_default_task(&mut self) {
+        if self.tasks.is_empty() {
+            self.tasks.push(Task::new(String::new()));
         }
     }
 }
 
 impl eframe::App for Taskmonger {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Apply the theme
+        self.ensure_default_task();
+
         if self.settings.dark_mode {
             ctx.set_visuals(egui::Visuals::dark());
         } else {
@@ -290,8 +271,7 @@ impl eframe::App for Taskmonger {
                                 self.add_tag(tag_name.clone());
                             }
 
-                            if ui.button("Assign & close").clicked() {
-                                self.apply_tag_to_selection(&tag);
+                            if ui.button("Add & close").clicked() {
                                 self.add_tag(tag_name);
                                 ctx.memory_mut(|w| w.data.remove_temp::<String>("tag".into()));
                             }
@@ -320,22 +300,6 @@ impl eframe::App for Taskmonger {
                                     let mut srgba = Color32::from_rgb(c[0], c[1], c[2]);
 
                                     ui.vertical_centered_justified(|ui| {
-                                        if !self.selection.is_empty() {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        RichText::new("Assign to selection")
-                                                            .color(srgba.readable_text_color()),
-                                                    )
-                                                    .fill(srgba),
-                                                )
-                                                .clicked()
-                                            {
-                                                self.apply_tag_to_selection(&tag);
-                                            }
-                                        } else {
-                                            ui.label("Select something to assign this tag.");
-                                        }
                                         let button = Button::new(format!("Color {ARROW_RIGHT}"))
                                             .fill(srgba.gamma_multiply(0.3));
                                         SubMenuButton::from_button(button)
@@ -379,14 +343,17 @@ impl eframe::App for Taskmonger {
                 });
 
                 ui.separator();
-                ui.label("Tagged ranges:");
+                ui.label("Tasks:");
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    let mut delete_tr: Option<TaggedRange> = None;
+                    let mut delete_idx: Option<usize> = None;
 
-                    dnd(ui, "drag_drop").show_vec(
-                        &mut self.tagged_ranges,
-                        |ui, current_range, handle, state| {
+                    dnd(ui, "task_drag_drop").show_vec(
+                        &mut self.tasks,
+                        |ui, task, handle, state| {
+                            if task.completed {
+                                return;
+                            }
                             ui.horizontal(|ui| {
                                 handle.ui(ui, |ui| {
                                     if state.dragged {
@@ -396,38 +363,36 @@ impl eframe::App for Taskmonger {
                                     }
                                 });
 
-                                let preview: String = self
-                                    .buffer
-                                    .chars()
-                                    .skip(current_range.range.start)
-                                    .take(current_range.range.end - current_range.range.start)
-                                    .take_while(|c| c != &'\n')
-                                    .take(30)
-                                    .collect();
+                                let preview = task.preview(30);
 
-                                if let Some(col) = &self.tags.get(&current_range.tag_name) {
-                                    let color = to_color32(**col);
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "{}: {}",
-                                            current_range.tag_name, preview
-                                        ))
-                                        .color(color),
-                                    );
+                                // Show with mixed tag color if any
+                                if let Some(color) = task.color(&self.tags) {
+                                    let tag_labels: String = task.tag_names.join(", ");
+                                    if tag_labels.is_empty() {
+                                        ui.label(egui::RichText::new(&preview).color(color));
+                                    } else {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{}: {}",
+                                                tag_labels, preview
+                                            ))
+                                            .color(color),
+                                        );
+                                    }
                                 } else {
-                                    ui.label(format!("{}: {}", current_range.tag_name, preview));
+                                    ui.label(&preview);
                                 }
+
                                 ui.horizontal(|ui| {
                                     ui.with_layout(
                                         Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            // TODO: add button to scroll to this range
                                             if ui.small_button(TRASH).clicked() {
-                                                delete_tr = Some(current_range.clone());
+                                                delete_idx = Some(state.index);
                                             }
-                                            let icon = if current_range.hide {EYE_CLOSED} else {EYE};
+                                            let icon = if task.hide { EYE_CLOSED } else { EYE };
                                             if ui.small_button(icon).clicked() {
-                                                current_range.hide = !current_range.hide;
+                                                task.hide = !task.hide;
                                             }
                                         },
                                     );
@@ -435,13 +400,58 @@ impl eframe::App for Taskmonger {
                             });
                         },
                     );
-                    if let Some(r) = delete_tr {
-                        self.delete_tagged_range(&r);
-                    };
+                    if let Some(idx) = delete_idx {
+                        self.tasks.remove(idx);
+                        self.ensure_default_task();
+                        let _ = self.save_to_disk();
+                    }
                 });
+
+                // Completed tasks section
+                let completed_count = self.tasks.iter().filter(|t| t.completed).count();
+                if completed_count > 0 {
+                    let id = ui.make_persistent_id("completed_tasks");
+                    egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ctx, id, false,
+                    )
+                    .show_header(ui, |ui| {
+                        ui.label(format!("Completed ({})", completed_count));
+                    })
+                    .body(|ui| {
+                        let mut restore_idx: Option<usize> = None;
+                        for (i, task) in self.tasks.iter().enumerate() {
+                            if !task.completed {
+                                continue;
+                            }
+                            ui.horizontal(|ui| {
+                                let preview = task.preview(30);
+                                let label = if let Some(color) = task.color(&self.tags) {
+                                    egui::RichText::new(&preview).color(color).strikethrough()
+                                } else {
+                                    egui::RichText::new(&preview).strikethrough()
+                                };
+                                ui.label(label);
+                                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui
+                                        .small_button(ARROW_COUNTER_CLOCKWISE)
+                                        .on_hover_text("Restore")
+                                        .clicked()
+                                    {
+                                        restore_idx = Some(i);
+                                    }
+                                });
+                            });
+                        }
+                        if let Some(idx) = restore_idx {
+                            self.tasks[idx].completed = false;
+                            self.tasks[idx].mark();
+                            let _ = self.save_to_disk();
+                        }
+                    });
+                }
             });
 
-        // Markdown view panel (conditional, on the right side of text edit)
+        // Markdown view panel
         if self.settings.markdown_view_enabled {
             egui::SidePanel::right("markdown_view_panel")
                 .resizable(true)
@@ -449,454 +459,216 @@ impl eframe::App for Taskmonger {
                 .min_width(200.0)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        // Sort tagged ranges by their position in the buffer
-
-                        for tr in &self.tagged_ranges {
-                            if tr.range.end <= self.buffer.len() {
-                                let text = &self.buffer[tr.range.clone()];
-
-                                ui.group(|ui| {
-                                    // Show tag name header with color
-                                    if let Some(col) = self.tags.get(&tr.tag_name) {
-                                        let color = to_color32(*col);
-                                        ui.label(
-                                            egui::RichText::new(&tr.tag_name).color(color).strong(),
-                                        );
-                                    } else {
-                                        ui.label(egui::RichText::new(&tr.tag_name).strong());
-                                    }
-                                    ui.separator();
-                                    // Get or create cache for this tagged range
-                                    let cache_key = format!(
-                                        "{}:{}-{}",
-                                        tr.tag_name, tr.range.start, tr.range.end
-                                    );
-                                    let cache = self.markdown_cache.entry(cache_key).or_default();
-
-                                    // Render markdown
-                                    egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
-                                });
-                                ui.add_space(10.0);
+                        for (i, task) in self.tasks.iter().enumerate() {
+                            if task.hide {
+                                continue;
                             }
+                            ui.group(|ui| {
+                                // Show tag names header with color
+                                if let Some(color) = task.color(&self.tags) {
+                                    let label = if task.tag_names.is_empty() {
+                                        "Untagged".to_string()
+                                    } else {
+                                        task.tag_names.join(", ")
+                                    };
+                                    ui.label(egui::RichText::new(label).color(color).strong());
+                                } else {
+                                    ui.label(egui::RichText::new("Untagged").strong());
+                                }
+                                ui.separator();
+
+                                let cache_key = format!("task_{}", i);
+                                let cache = self.markdown_cache.entry(cache_key).or_default();
+                                egui_commonmark::CommonMarkViewer::new().show(
+                                    ui,
+                                    cache,
+                                    &task.buffer,
+                                );
+                            });
+                            ui.add_space(10.0);
                         }
                     });
                 });
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let mut tagged_ranges = self.tagged_ranges.clone();
-            let tags = self.tags.clone();
-
-            //  make a default colormap for all chars
-            let mut colormap: HashMap<usize, Color32> = Default::default();
-            // go though all ranges. If color exists, mix it.
-            for tr in &mut tagged_ranges {
-                if let Some(col) = tags.get(&tr.tag_name) {
-                    for i in &mut tr.range {
-                        let x = to_color32(*col);
-                        colormap
-                            .entry(i)
-                            .and_modify(|c| {
-                                *c = mix_colors(*c, x);
-                            })
-                            .or_insert(x);
-                    }
-                }
-            }
-
-            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
-                let text = text.as_str();
-                let mut layout_job = egui::text::LayoutJob::default();
-                layout_job.wrap.max_width = wrap_width;
-
-                let default_color = ui.style().visuals.text_color();
-                let font_id = egui::FontId::monospace(15.0);
-
-                // TODO: if it is faster, collapse ranges so we need fewer layoutjobs
-                // TODO: expose this as setting later
-                let background_is_colored = self.settings.mark_as_background;
-
-                for (i, c) in text.chars().enumerate() {
-                    
-                    // TODO this is expensive
-                    let mut skip = false;
-                    for tr in &self.tagged_ranges {
-                        if tr.hide && tr.range.contains(&i) {
-                            skip = true;
-                        }
-                    }
-                    if skip { continue;}
-                    
-                    let selected = self.selection.contains(&i);
-                    let selected_color = ui.visuals().selection.bg_fill;
-
-                    // Show toggled checkbox character on hover
-                    let display_char = if self.hovered_checkbox == Some(i) {
-                        match c {
-                            ' ' => 'x',
-                            'x' | 'X' => ' ',
-                            other => other,
-                        }
-                    } else {
-                        c
-                    };
-
-                    if let Some(col) = colormap.get(&i) {
-
-
-                        layout_job.append(
-                            &display_char.to_string(),
-                            0.0,
-                            egui::TextFormat {
-                                font_id: font_id.clone(),
-                                color: if background_is_colored {
-                                    if selected {
-                                        ui.visuals().selection.stroke.color
-                                    } else {
-                                        col.readable_text_color()
-                                    }
-                                } else if selected {
-                                    ui.visuals().selection.stroke.color
-                                } else {
-                                    *col
-                                },
-                                background: if selected {
-                                    selected_color
-                                } else if background_is_colored {
-                                    *col
-                                } else {
-                                    Color32::from_white_alpha(0)
-                                },
-                                ..Default::default()
-                            },
-                        );
-                    } else {
-                        // default text
-                        layout_job.append(
-                            &display_char.to_string(),
-                            0.0,
-                            egui::TextFormat {
-                                font_id: font_id.clone(),
-                                color: if selected {
-                                    ui.visuals().selection.stroke.color
-                                } else {
-                                    default_color
-                                },
-                                background: if selected {
-                                    selected_color
-                                } else {
-                                    Color32::from_white_alpha(0)
-                                },
-                                ..Default::default()
-                            },
-                        );
-                    }
-                }
-
-                ui.fonts_mut(|f| f.layout_job(layout_job))
-            };
-
-            // Save selection before TextEdit processes input (right-click clears it)
-            let saved_selection = self.selection.clone();
-
-            let output = egui::ScrollArea::vertical()
-                .show(ui, |ui| {
-                    // let filter =
-                    // let mut filtered_buffer = self.buffer.clone();
-
-                    egui::TextEdit::multiline(&mut self.buffer)
-                        .desired_width(f32::INFINITY)
-                        .lock_focus(true)
-                        .frame(false)
-                        .font(egui::TextStyle::Monospace)
-                        .layouter(&mut layouter)
-                        .show(ui)
-                })
-                .inner;
-
-            // if output.response.changed() {
-            //     self.buffer.replace(fil, to)
-            // }
-
             let tags_clone = self.tags.clone();
-            let tagged_ranges_clone = self.tagged_ranges.clone();
-            let selection = self.selection.clone();
-            let context_menu_open = output.response.context_menu(|ui| {
-                // Assign tag to selection
-                if !selection.is_empty() {
-                    for (tag, c) in &tags_clone {
-                        let color = to_color32(*c);
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new(tag).color(color.readable_text_color()),
-                                )
-                                .fill(color),
-                            )
-                            .clicked()
-                        {
-                            self.apply_tag_to_selection(tag);
-                            ui.close();
+            let mut any_changed = false;
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let mut new_task_after: Option<usize> = None;
+
+                for (i, task) in self.tasks.iter_mut().enumerate() {
+                    if task.hide || task.completed {
+                        continue;
+                    }
+
+                    // Filter: skip tasks that don't match
+                    if !self.filter.text.is_empty()
+                        && !task
+                            .buffer
+                            .to_lowercase()
+                            .contains(&self.filter.text.to_lowercase())
+                        && !task
+                            .tag_names
+                            .iter()
+                            .any(|t| t.to_lowercase().contains(&self.filter.text.to_lowercase()))
+                    {
+                        continue;
+                    }
+
+                    let task_color = task.color(&tags_clone);
+
+                    let mut text_edit = egui::TextEdit::multiline(&mut task.buffer)
+                        .id_salt(format!("task_edit_{}", i))
+                        .desired_width(f32::INFINITY)
+                        .lock_focus(false)
+                        // .frame(false)
+                        .font(egui::TextStyle::Monospace);
+
+                    let mult = if i % 2 == 0 { 0.12 } else { 0.20 };
+                    if let Some(color) = task_color {
+                        text_edit = text_edit.background_color(color.gamma_multiply(mult));
+                    }
+
+                    let output = text_edit.show(ui);
+
+                    if output.response.changed() {
+                        task.mark();
+                        any_changed = true;
+
+                        // Markdown list continuation
+                        if let Some(range) = output.cursor_range {
+                            let keys_down = ctx.input(|i| i.keys_down.clone());
+                            let enter = keys_down.contains(&Key::Enter);
+
+                            if enter {
+                                let cursor_char_pos = range.primary.index;
+                                let cursor_byte_pos = task
+                                    .buffer
+                                    .char_indices()
+                                    .nth(cursor_char_pos)
+                                    .map(|(i, _)| i)
+                                    .unwrap_or(task.buffer.len());
+
+                                if cursor_byte_pos > 0
+                                    && task.buffer.as_bytes()[cursor_byte_pos - 1] == b'\n'
+                                {
+                                    let before_newline = cursor_byte_pos - 1;
+                                    let line_start = task.buffer[..before_newline]
+                                        .rfind('\n')
+                                        .map(|i| i + 1)
+                                        .unwrap_or(0);
+                                    let previous_line =
+                                        task.buffer[line_start..before_newline].to_string();
+
+                                    if let Some(prefix) = tools::extract_list_prefix(&previous_line)
+                                    {
+                                        let prefix_char_len = prefix.chars().count();
+                                        task.buffer.insert_str(cursor_byte_pos, &prefix);
+
+                                        let new_cursor_pos = cursor_char_pos + prefix_char_len;
+                                        let mut state = output.state.clone();
+                                        state.cursor.set_char_range(Some(
+                                            egui::text::CCursorRange::one(
+                                                egui::text::CCursor::new(new_cursor_pos),
+                                            ),
+                                        ));
+                                        state.store(ctx, output.response.id);
+                                    }
+                                }
+                            }
                         }
                     }
-                    ui.separator();
-                }
 
-                // Clear tags from selection
-                if !selection.is_empty() {
-                    let overlapping: Vec<_> = tagged_ranges_clone
-                        .iter()
-                        .filter(|tr| tr.range.intersects(&selection))
-                        .collect();
-                    if !overlapping.is_empty() {
-                        if ui.button(format!("{ERASER} Clear tags from selection")).clicked() {
-                            let sel = selection.clone();
-                            self.tagged_ranges = self
-                                .tagged_ranges
-                                .drain(..)
-                                .flat_map(|tr| {
-                                    if !tr.range.intersects(&sel) {
-                                        return vec![tr];
-                                    }
-                                    let mut result = Vec::new();
-                                    // Part before selection
-                                    if tr.range.start < sel.start {
-                                        result.push(TaggedRange {
-                                            range: tr.range.start..sel.start,
-                                            ..tr.clone()
-                                        });
-                                    }
-                                    // Part after selection
-                                    if tr.range.end > sel.end {
-                                        result.push(TaggedRange {
-                                            range: sel.end..tr.range.end,
-                                            ..tr
-                                        });
-                                    }
-                                    result
-                                })
-                                .collect();
-                            let _ = self.save_to_disk();
-                            ui.close();
+                    // Checkbox hover and toggle
+                    if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                        if output.response.hovered() {
+                            let cursor = output.galley.cursor_from_pos(pos - output.galley_pos);
+                            let char_idx = cursor.index;
+
+                            if let Some((_middle_idx, is_checked)) =
+                                tools::find_checkbox_at(&task.buffer, char_idx)
+                            {
+                                ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+
+                                if ctx.input(|i| i.pointer.primary_clicked()) {
+                                    let byte_idx = task
+                                        .buffer
+                                        .char_indices()
+                                        .nth(_middle_idx)
+                                        .map(|(i, _)| i)
+                                        .unwrap();
+                                    let new_char = if is_checked { " " } else { "x" };
+                                    task.buffer.replace_range(byte_idx..byte_idx + 1, new_char);
+                                    task.mark();
+                                    any_changed = true;
+                                }
+                            }
+                        }
+                    }
+
+                    // Context menu for task
+                    let task_tags = task.tag_names.clone();
+                    output.response.context_menu(|ui| {
+                        // Assign tags
+                        for (tag, c) in &tags_clone {
+                            let color = to_color32(*c);
+                            let already_assigned = task_tags.contains(tag);
+                            let label = if already_assigned {
+                                format!("{CHECK} {}", tag)
+                            } else {
+                                tag.to_string()
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(label)
+                                            .color(color.readable_text_color()),
+                                    )
+                                    .fill(color),
+                                )
+                                .clicked()
+                            {
+                                if already_assigned {
+                                    task.tag_names.retain(|t| t != tag);
+                                } else {
+                                    task.tag_names.push(tag.clone());
+                                }
+                                any_changed = true;
+                                ui.close();
+                            }
                         }
                         ui.separator();
-                    }
+                        if ui.button(format!("{CHECK} Mark completed")).clicked() {
+                            task.completed = true;
+                            task.mark();
+                            any_changed = true;
+                            ui.close();
+                        }
+                        if ui.button(format!("{PLUS} New task after this")).clicked() {
+                            new_task_after = Some(i);
+                            ui.close();
+                        }
+                    });
+
                 }
 
-                // Tagged ranges containing cursor
-                let cursor_pos = selection.start;
-                let ranges_at_cursor: Vec<_> = tagged_ranges_clone
-                    .iter()
-                    .filter(|tr| tr.range.contains(&cursor_pos))
-                    .collect();
-                if !ranges_at_cursor.is_empty() {
-                    SubMenuButton::new(format!("{TAG} Tags here ({})…", ranges_at_cursor.len()))
-                        .ui(ui, |ui| {
-                            for tr in &ranges_at_cursor {
-                                let preview: String = self
-                                    .buffer
-                                    .chars()
-                                    .skip(tr.range.start)
-                                    .take(tr.range.end - tr.range.start)
-                                    .take_while(|c| c != &'\n')
-                                    .take(30)
-                                    .collect();
-                                ui.horizontal(|ui| {
-                                    if let Some(col) = tags_clone.get(&tr.tag_name) {
-                                        let color = to_color32(*col);
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{}: {}",
-                                                tr.tag_name, preview
-                                            ))
-                                            .color(color),
-                                        );
-                                    } else {
-                                        ui.label(format!("{}: {}", tr.tag_name, preview));
-                                    }
-                                    if ui.small_button(TRASH).clicked() {
-                                        self.delete_tagged_range(tr);
-                                        ui.close();
-                                    }
-                                });
-                            }
-                        });
+                // Add new task button
+                ui.vertical_centered_justified(|ui| {
+                    if ui.button(format!("{PLUS} New task")).clicked() {
+                        new_task_after = Some(self.tasks.len().saturating_sub(1));
+                    }
+                });
+
+                if let Some(idx) = new_task_after {
+                    self.tasks.insert(idx + 1, Task::new(String::new()));
+                    any_changed = true;
                 }
             });
 
-            let selection_len = self.selection.len() as i32;
-
-            // Detect right-click via raw input events.
-            // secondary_down() catches the PRESS frame (when TextEdit clears cursor),
-            // secondary_clicked() catches the RELEASE frame,
-            // context_menu_open catches all frames while the menu is visible.
-            let secondary_active = ctx.input(|i| {
-                i.pointer.secondary_down() || i.pointer.secondary_clicked()
-            });
-
-            if (context_menu_open.is_some() || secondary_active) && !saved_selection.is_empty() {
-                self.selection = saved_selection;
-            } else if let Some(cursor_range) = output.state.cursor.char_range() {
-                self.selection = cursor_range.as_sorted_char_range();
-            }
-            // Checkbox hover preview and click-to-toggle
-            let mut current_hover_checkbox: Option<usize> = None;
-            if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
-                if output.response.hovered() {
-                    let cursor =
-                        output
-                            .galley
-                            .cursor_from_pos(pos - output.galley_pos);
-                    let char_idx = cursor.index;
-
-                    if let Some((middle_idx, is_checked)) =
-                        tools::find_checkbox_at(&self.buffer, char_idx)
-                    {
-                        current_hover_checkbox = Some(middle_idx);
-                        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
-
-                        if ctx.input(|i| i.pointer.primary_clicked()) {
-                            // Toggle the checkbox character in-place
-                            let byte_idx = self
-                                .buffer
-                                .char_indices()
-                                .nth(middle_idx)
-                                .map(|(i, _)| i)
-                                .unwrap();
-                            let new_char = if is_checked { " " } else { "x" };
-                            self.buffer
-                                .replace_range(byte_idx..byte_idx + 1, new_char);
-                            // Clear hover to avoid one-frame double-toggle in layouter
-                            current_hover_checkbox = None;
-                            let _ = self.save_to_disk();
-                        }
-                    }
-                }
-            }
-            self.hovered_checkbox = current_hover_checkbox;
-
-            if output.response.changed() {
-                debug!("len {selection_len}");
-                let mut shift: i32 = 0;
-
-                if let Some(range) = output.cursor_range {
-                    debug!("Cursor range {:?}", range);
-
-                    let keys_down = ctx.input(|i| i.keys_down.clone());
-                    let delete = keys_down.iter().nth(0) == Some(&Key::Backspace);
-                    let enter = keys_down.contains(&Key::Enter);
-
-                    if !keys_down.is_empty() {
-                        debug!("key down {:?}", keys_down);
-
-                        // No selection
-                        if selection_len == 0 {
-                            debug!("Single range Cursor");
-                            if delete {
-                                shift -= 1;
-                            } else {
-                                shift += 1;
-                            }
-                        } else {
-                            // let selection_len = range.as_sorted_char_range().len() as i32;
-                            debug!("Cursor range {:?}, len {selection_len}", range);
-                            if delete {
-                                shift -= selection_len;
-                            } else {
-                                shift -= selection_len - 1;
-                            }
-                        }
-
-                        // Markdown list continuation: on Enter, continue list prefix
-                        if enter && !delete && selection_len == 0 {
-                            let cursor_char_pos = range.primary.index;
-                            let cursor_byte_pos = self
-                                .buffer
-                                .char_indices()
-                                .nth(cursor_char_pos)
-                                .map(|(i, _)| i)
-                                .unwrap_or(self.buffer.len());
-
-                            if cursor_byte_pos > 0
-                                && self.buffer.as_bytes()[cursor_byte_pos - 1] == b'\n'
-                            {
-                                let before_newline = cursor_byte_pos - 1;
-                                let line_start = self.buffer[..before_newline]
-                                    .rfind('\n')
-                                    .map(|i| i + 1)
-                                    .unwrap_or(0);
-                                let previous_line =
-                                    self.buffer[line_start..before_newline].to_string();
-
-                                if let Some(prefix) =
-                                    tools::extract_list_prefix(&previous_line)
-                                {
-                                    let prefix_char_len = prefix.chars().count() as i32;
-                                    self.buffer.insert_str(cursor_byte_pos, &prefix);
-                                    shift += prefix_char_len;
-
-                                    // Move cursor to end of inserted prefix
-                                    let new_cursor_pos =
-                                        cursor_char_pos + prefix_char_len as usize;
-                                    let mut state = output.state.clone();
-                                    state.cursor.set_char_range(Some(
-                                        egui::text::CCursorRange::one(
-                                            egui::text::CCursor::new(new_cursor_pos),
-                                        ),
-                                    ));
-                                    state.store(ctx, output.response.id);
-                                }
-                            }
-                        }
-
-                        debug!("shift {:?}", shift);
-
-                        for tr in &mut self.tagged_ranges {
-                            debug!(
-                                "Tagged range: {:?}, shift: {shift}, cursor: {}",
-                                tr, range.primary.index
-                            );
-                            let mut modified = false;
-                            if tr.range.start > range.primary.index {
-                                tr.range.start =
-                                    (tr.range.start as i32 + shift).unsigned_abs() as usize;
-                                modified = true;
-                            }
-
-                            if tr.range.end > range.primary.index {
-                                tr.range.end =
-                                    (tr.range.end as i32 + shift).unsigned_abs() as usize;
-                                modified = true;
-                            }
-                            // when at the end of a range, extend it. This is convenient when extending to an existing paragraph
-                            if tr.range.end == range.primary.index.saturating_sub(1) && shift > 0 {
-                                let last = self
-                                    .buffer
-                                    .chars()
-                                    .nth(range.primary.index.saturating_sub(1));
-
-                                let before_last = self
-                                    .buffer
-                                    .chars()
-                                    .nth(range.primary.index.saturating_sub(2));
-
-                                info!("Shift 1, {:?} {:?}", before_last, last);
-                                if !(last == Some('\n') && before_last == Some('\n')) {
-                                    tr.range.end =
-                                        (tr.range.end as i32 + shift).unsigned_abs() as usize;
-                                    modified = true;
-                                }
-                                // TODO: if last two chars before cursor are newlines, donot do the next shift
-                            }
-                            if modified {
-                                tr.mark();
-                            }
-                        }
-                    }
-                }
-
-                // Clean up invalid ranges and auto-save on text changes
-                self.clean_invalid_ranges();
+            if any_changed {
                 let _ = self.save_to_disk();
             }
         });
