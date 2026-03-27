@@ -460,7 +460,7 @@ impl eframe::App for Taskmonger {
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for (i, task) in self.tasks.iter().enumerate() {
-                            if task.hide {
+                            if task.hide || task.completed {
                                 continue;
                             }
                             ui.group(|ui| {
@@ -520,19 +520,29 @@ impl eframe::App for Taskmonger {
 
                     let task_color = task.color(&tags_clone);
 
-                    let mut text_edit = egui::TextEdit::multiline(&mut task.buffer)
+                    // Reserve a background shape slot before the text edit
+                    let bg_idx = ui.painter().add(egui::Shape::Noop);
+
+                    let text_edit = egui::TextEdit::multiline(&mut task.buffer)
                         .id_salt(format!("task_edit_{}", i))
                         .desired_width(f32::INFINITY)
+                        .desired_rows(1)
                         .lock_focus(false)
-                        // .frame(false)
+                        .frame(false)
                         .font(egui::TextStyle::Monospace);
 
+                    let output = text_edit.show(ui);
+
+                    // Paint background behind text
                     let mult = if i % 2 == 0 { 0.12 } else { 0.20 };
                     if let Some(color) = task_color {
-                        text_edit = text_edit.background_color(color.gamma_multiply(mult));
+                        let mult = if output.response.hovered() { mult + 0.05 } else { mult };
+                        let bg = color.gamma_multiply(mult);
+                        ui.painter().set(
+                            bg_idx,
+                            egui::Shape::rect_filled(output.response.rect, 0.0, bg),
+                        );
                     }
-
-                    let output = text_edit.show(ui);
 
                     if output.response.changed() {
                         task.mark();
